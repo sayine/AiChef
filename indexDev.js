@@ -3,7 +3,7 @@ const express = require('express')
 const helmet = require('helmet')
 const rateLimit = require('express-rate-limit')
 const { MongoClient, ObjectId } = require('mongodb')
-const { Configuration, OpenAIApi } = require("openai");
+const OpenAI = require('openai')
 const cors = require('cors')
 const app = express()
 const port = process.env.PORT || 3000
@@ -15,8 +15,9 @@ const limiter = rateLimit({
   max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
-const configuration = new Configuration({apiKey: process.env.SECRET_KEY});
-const openai = new OpenAIApi(configuration);
+const openai = new OpenAI({
+  apiKey: process.env.SECRET_KEY
+});
 const url = process.env.MONGODB_URI;
 const dbName = 'mydatabase';
 let mongoClient;
@@ -87,10 +88,9 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    const completion = await openai.createChatCompletion({
+    const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: message }],
-      
     });
 
     // Store the interaction in the database
@@ -98,11 +98,11 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
     await db.collection('aiInteractions').insertOne({
       userId: new ObjectId(userId),
       message,
-      response: completion.data.choices[0].message.content,
+      response: completion.choices[0].message.content,
       timestamp: new Date()
     });
 
-    res.json({ response: completion.data.choices[0].message.content });
+    res.json({ response: completion.choices[0].message.content });
   } catch (error) {
     console.error('OpenAI API Error:', error);
     res.status(500).json({ error: 'Error processing your request' });
