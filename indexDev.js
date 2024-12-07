@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit')
 const { MongoClient, ObjectId } = require('mongodb')
 const { Configuration, OpenAIApi } = require("openai");
 const cors = require('cors')
+const app = express()
 const port = process.env.PORT || 3000
 app.use(express.json())
 app.use(helmet())
