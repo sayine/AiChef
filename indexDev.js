@@ -5,6 +5,8 @@ const rateLimit = require('express-rate-limit')
 const { MongoClient, ObjectId } = require('mongodb')
 const OpenAI = require('openai')
 const cors = require('cors')
+const jwt = require('jsonwebtoken')
+const jwksClient = require('jwks-rsa')
 const app = express()
 const port = process.env.PORT || 3000
 
@@ -37,6 +39,33 @@ verifyReceipt.config({
   secret: process.env.APPLE_SHARED_SECRET, // From App Store Connect
   environment: process.env.NODE_ENV === 'production' ? 'production' : 'sandbox'
 });
+
+// Apple Sign in için JWKS client
+const client = jwksClient({
+  jwksUri: 'https://appleid.apple.com/auth/keys'
+});
+
+// Apple token doğrulama fonksiyonu
+const verifyAppleToken = async (idToken, bundleId) => {
+  try {
+    const decoded = jwt.decode(idToken, { complete: true });
+    if (!decoded || !decoded.header || !decoded.header.kid) {
+      throw new Error('Invalid token format');
+    }
+
+    const key = await client.getSigningKey(decoded.header.kid);
+    const signingKey = key.getPublicKey();
+    
+    return jwt.verify(idToken, signingKey, {
+      algorithms: ['RS256'],
+      audience: bundleId,
+      issuer: 'https://appleid.apple.com'
+    });
+  } catch (error) {
+    console.error('Token verification error:', error);
+    throw error;
+  }
+};
 
 async function connectDB() {
   try {
@@ -117,22 +146,14 @@ app.post('/register', async (req, res) => {
   try {
     const { idToken, name, email } = req.body;
     
-    // Validate Apple ID Token
-    let appleUser;
-    try {
-      appleUser = await appleSignin.verifyIdToken(idToken, {
-        audience: process.env.APPLE_CLIENT_ID, // Your Apple Client ID
-        ignoreExpiration: true, // Handle token expiration as needed
-      });
-    } catch (error) {
-      return res.status(401).json({ error: 'Invalid Apple ID token' });
-    }
+    // Apple ID Token doğrulama
+    const verified = await verifyAppleToken(idToken, process.env.APPLE_BUNDLE_ID);
 
     const db = await connectDB();
     const collection = db.collection('users');
 
-    // Use Apple's sub as unique identifier
-    const existingUser = await collection.findOne({ appleId: appleUser.sub });
+    // Apple ID ile mevcut kullanıcı kontrolü
+    const existingUser = await collection.findOne({ appleId: verified.sub });
     if (existingUser) {
       return res.status(200).json({ 
         message: 'User already exists',
@@ -140,22 +161,37 @@ app.post('/register', async (req, res) => {
       });
     }
 
-    // Create new user
+    // Yeni kullanıcı oluştur
     const user = {
-      email: email || appleUser.email, // Apple might not always provide email
-      name: name || 'Apple User', // Name is optional in Apple Sign In
-      appleId: appleUser.sub,
+      email: email || verified.email, // Apple bazen email vermeyebilir
+      name: name || 'Apple User',     // İsim opsiyonel
+      appleId: verified.sub,          // Apple'ın unique user ID'si
       createdAt: new Date(),
       authProvider: 'apple'
     };
 
     const result = await collection.insertOne(user);
+    
+    // Subscription collection'ında deneme süresi kaydı oluştur
+    await db.collection('subscriptions').insertOne({
+      userId: result.insertedId,
+      isActive: true,
+      trialPeriod: true,
+      startDate: new Date(),
+      expirationDate: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)), // 7 günlük deneme
+      createdAt: new Date()
+    });
+
     res.status(201).json({ 
       message: 'User registered successfully',
       userId: result.insertedId 
     });
+
   } catch (error) {
     console.error('Registration Error:', error);
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ error: 'Invalid Apple ID token' });
+    }
     res.status(500).json({ error: 'Error during registration' });
   }
 });
@@ -168,14 +204,28 @@ app.get('/userInfo/:userId', async (req, res) => {
     
     const user = await collection.findOne(
       { _id: new ObjectId(userId) },
-      { projection: { password: 0 } }
+      { projection: { password: 0 } } // Hassas bilgileri hariç tut
     );
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json(user);
+    // Subscription bilgisini de ekle
+    const subscription = await db.collection('subscriptions').findOne({
+      userId: new ObjectId(userId),
+      isActive: true,
+      expirationDate: { $gt: new Date() }
+    });
+
+    res.json({
+      ...user,
+      subscription: {
+        isActive: !!subscription,
+        expirationDate: subscription?.expirationDate,
+        isTrial: subscription?.trialPeriod
+      }
+    });
   } catch (error) {
     console.error('Error fetching user:', error);
     res.status(500).json({ error: 'Error fetching user information' });
