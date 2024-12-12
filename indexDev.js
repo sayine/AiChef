@@ -58,7 +58,6 @@ const verifyAppleToken = async (idToken) => {
     
     return jwt.verify(idToken, signingKey, {
       algorithms: ['RS256'],
-      audience: "com.aichef.aichef",
       issuer: 'https://appleid.apple.com'
     });
   } catch (error) {
