@@ -7,12 +7,16 @@ const OpenAI = require('openai')
 const cors = require('cors')
 const app = express()
 const port = process.env.PORT || 3000
+
+app.set('trust proxy', 1)
 app.use(express.json())
 app.use(helmet())
 app.use(cors())
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true, // Rate limit bilgisini header'lara ekle
+  legacyHeaders: false,
 });
 app.use(limiter);
 const openai = new OpenAI({
