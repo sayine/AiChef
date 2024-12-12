@@ -69,10 +69,15 @@ const verifyAppleToken = async (idToken, bundleId) => {
 
 async function connectDB() {
   try {
-    mongoClient = new MongoClient(url, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
+    mongoClient = new MongoClient(process.env.MONGODB_URI, {
+      retryWrites: true,
+      w: "majority",
+      minPoolSize: 1,
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
     });
+    
     await mongoClient.connect();
     console.log('Connected to MongoDB');
     return mongoClient.db(dbName);
