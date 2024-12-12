@@ -58,7 +58,7 @@ const verifyAppleToken = async (idToken, bundleId) => {
     
     return jwt.verify(idToken, signingKey, {
       algorithms: ['RS256'],
-      audience: bundleId,
+      audience: process.env.APPLE_BUNDLE_ID,
       issuer: 'https://appleid.apple.com'
     });
   } catch (error) {
