@@ -46,7 +46,7 @@ const client = jwksClient({
 });
 
 // Apple token doğrulama fonksiyonu
-const verifyAppleToken = async (idToken, bundleId) => {
+const verifyAppleToken = async (idToken) => {
   try {
     const decoded = jwt.decode(idToken, { complete: true });
     if (!decoded || !decoded.header || !decoded.header.kid) {
@@ -58,7 +58,7 @@ const verifyAppleToken = async (idToken, bundleId) => {
     
     return jwt.verify(idToken, signingKey, {
       algorithms: ['RS256'],
-      audience: process.env.APPLE_BUNDLE_ID,
+      audience: com.aichef.aichef,
       issuer: 'https://appleid.apple.com'
     });
   } catch (error) {
@@ -152,7 +152,7 @@ app.post('/register', async (req, res) => {
     const { idToken, name, email } = req.body;
     
     // Apple ID Token doğrulama
-    const verified = await verifyAppleToken(idToken, process.env.APPLE_BUNDLE_ID);
+    const verified = await verifyAppleToken(idToken);
 
     const db = await connectDB();
     const collection = db.collection('users');
