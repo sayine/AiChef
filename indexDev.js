@@ -13,7 +13,12 @@ const port = process.env.PORT || 3000
 app.set('trust proxy', 1)
 app.use(express.json())
 app.use(helmet())
-app.use(cors())
+app.use(cors({
+  origin: '*', // Tüm originlere izin ver (production'da daha spesifik olmalı)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
