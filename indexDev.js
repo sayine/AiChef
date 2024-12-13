@@ -70,25 +70,20 @@ const verifyAppleToken = async (idToken) => {
     throw error;
   }
 };
+let dbInstance;
 
 async function connectDB() {
-  try {
-    mongoClient = new MongoClient(process.env.MONGODB_URI, {
-      retryWrites: true,
-      w: "majority",
-      minPoolSize: 1,
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-    });
-    
-    await mongoClient.connect();
-    console.log('Connected to MongoDB');
-    return mongoClient.db(dbName);
-  } catch (error) {
-    console.error('MongoDB connection error:', error);
-    throw error;
-  }
+  if (dbInstance) return dbInstance;
+
+  const client = new MongoClient(process.env.MONGODB_URI, {
+    retryWrites: true,
+    useUnifiedTopology: true,
+    maxPoolSize: 10,
+  });
+  await client.connect();
+  dbInstance = client.db(dbName);
+  console.log('Connected to MongoDB');
+  return dbInstance;
 }
 
 // Add this middleware function before your routes
