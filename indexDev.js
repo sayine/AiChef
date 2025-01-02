@@ -241,19 +241,60 @@ app.post('/preferences/:userId', requireActiveSubscription, async (req, res) => 
     const { userId } = req.params;
     const preferences = req.body;
     
+    // Input validation
+    if (!preferences || Object.keys(preferences).length === 0) {
+      return res.status(400).json({ error: 'Preferences data is required' });
+    }
+
     const db = await connectDB();
     const collection = db.collection('preferences');
     
-    await collection.updateOne(
-      { userId: new ObjectId(userId) },
-      { $set: { ...preferences, updatedAt: new Date() } },
-      { upsert: true }
+    // MongoDB ObjectId dönüşümünü kontrol et
+    let userObjectId;
+    try {
+      userObjectId = new ObjectId(userId);
+    } catch (error) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+
+    // Update işlemini daha detaylı hale getir
+    const result = await collection.updateOne(
+      { userId: userObjectId },
+      { 
+        $set: {
+          ...preferences,
+          userId: userObjectId, // userId'yi tekrar ekle
+          updatedAt: new Date()
+        }
+      },
+      { 
+        upsert: true,
+        returnDocument: 'after' // Güncellenmiş dokümanı döndür
+      }
     );
 
-    res.json({ message: 'Preferences updated successfully' });
+    // Update sonucunu kontrol et
+    if (result.matchedCount === 0 && !result.upsertedId) {
+      return res.status(404).json({ error: 'Failed to update preferences' });
+    }
+
+    // Güncellenmiş tercihleri al
+    const updatedPreferences = await collection.findOne({ userId: userObjectId });
+
+    // Başarılı yanıt döndür
+    res.json({ 
+      message: 'Preferences updated successfully',
+      preferences: updatedPreferences
+    });
+
   } catch (error) {
     console.error('Error updating preferences:', error);
-    res.status(500).json({ error: 'Error updating preferences' });
+    // Daha detaylı hata mesajı
+    res.status(500).json({ 
+      error: 'Error updating preferences',
+      details: error.message,
+      code: error.code
+    });
   }
 });
 
