@@ -8,7 +8,7 @@ const cors = require('cors')
 const jwt = require('jsonwebtoken')
 const jwksClient = require('jwks-rsa')
 const app = express()
-const port = process.env.PORT || 3000
+const port = process.env.PORT || 3000 
 
 app.set('trust proxy', 1)
 app.use(express.json())
@@ -29,15 +29,12 @@ app.use(limiter);
 const openai = new OpenAI({
   apiKey: process.env.SECRET_KEY
 });
-const url = process.env.MONGODB_URI;
 const dbName = 'mydatabase';
-let mongoClient;
-const appleSignin = require('apple-signin-auth');
 const verifyReceipt = require('node-apple-receipt-verify');
-const SUBSCRIPTION_TYPES = {
-  MONTHLY: 'monthly_subscription',
-  // Add other subscription types if needed
-};
+// Remove or comment out the unused constant
+// const SUBSCRIPTION_TYPES = {
+//   MONTHLY: 'monthly_subscription',
+// };
 
 // Configure receipt verification
 verifyReceipt.config({
@@ -86,10 +83,12 @@ async function connectDB() {
   return dbInstance;
 }
 
-// Add this middleware function before your routes
+// Add this after the MongoDB connection setup
+const TRIAL_MAX_RECIPES = 3;
+
+// Modify the requireActiveSubscription middleware
 const requireActiveSubscription = async (req, res, next) => {
   try {
-    // Extract userId from request (either from body, params, or auth token)
     const userId = req.body.userId || req.params.userId || req.query.userId;
     
     if (!userId) {
@@ -97,20 +96,30 @@ const requireActiveSubscription = async (req, res, next) => {
     }
 
     const db = await connectDB();
+    const user = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(userId) });
+    
+    // Check for active paid subscription
     const subscription = await db.collection('subscriptions').findOne({
-      userId: new ObjectId(userId),
+      userId: ObjectId.createFromHexString(userId),
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
 
-    if (!subscription) {
-      return res.status(403).json({ 
-        error: 'Active subscription required',
-        message: 'Please subscribe to access this feature'
-      });
+    if (subscription && !subscription.trialPeriod) {
+      return next(); // Paid subscription - full access
     }
 
-    // If subscription is valid, proceed to the next middleware/route handler
+    // For trial users, check recipe count only for AI recipe endpoints
+    if (req.path.includes('/uemes171221')) {
+      if (user.trialRecipeCount >= TRIAL_MAX_RECIPES) {
+        return res.status(403).json({ 
+          error: 'Trial limit reached',
+          message: 'You have used all your trial recipe generations. Please subscribe for unlimited access.'
+        });
+      }
+    }
+
+    // Allow access for trial users
     next();
   } catch (error) {
     console.error('Subscription check error:', error);
@@ -118,6 +127,7 @@ const requireActiveSubscription = async (req, res, next) => {
   }
 };
 
+// Modify the AI endpoint to track recipe count
 app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
   try {
     const { message, userId } = req.body;
@@ -125,21 +135,41 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
+    const db = await connectDB();
+    const user = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(userId) });
+    
+    // Only increment count for trial users
+    const subscription = await db.collection('subscriptions').findOne({
+      userId: ObjectId.createFromHexString(userId),
+      isActive: true,
+      trialPeriod: true
+    });
+
+    if (subscription) {
+      await db.collection('users').updateOne(
+        { _id: ObjectId.createFromHexString(userId) },
+        { $inc: { trialRecipeCount: 1 } }
+      );
+    }
+
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: message }],
     });
 
-    // Store the interaction in the database
-    const db = await connectDB();
     await db.collection('aiInteractions').insertOne({
-      userId: new ObjectId(userId),
+      userId: ObjectId.createFromHexString(userId),
       message,
       response: completion.choices[0].message.content,
       timestamp: new Date()
     });
 
-    res.json({ response: completion.choices[0].message.content });
+    res.json({ 
+      response: completion.choices[0].message.content,
+      remainingTrialRequests: subscription ? 
+        TRIAL_MAX_RECIPES - (user.trialRecipeCount + 1) : 
+        'unlimited'
+    });
   } catch (error) {
     console.error('OpenAI API Error:', error);
     res.status(500).json({ error: 'Error processing your request' });
@@ -165,13 +195,14 @@ app.post('/register', async (req, res) => {
       });
     }
 
-    // Yeni kullanıcı oluştur
+    // Modify user object to include trialRecipeCount
     const user = {
-      email: email || verified.email, // Apple bazen email vermeyebilir
-      name: name || 'Apple User',     // İsim opsiyonel
-      appleId: verified.sub,          // Apple'ın unique user ID'si
+      email: email || verified.email,
+      name: name || 'Apple User',
+      appleId: verified.sub,
       createdAt: new Date(),
-      authProvider: 'apple'
+      authProvider: 'apple',
+      trialRecipeCount: 0
     };
 
     const result = await collection.insertOne(user);
@@ -207,7 +238,7 @@ app.get('/userInfo/:userId', async (req, res) => {
     const collection = db.collection('users');
     
     const user = await collection.findOne(
-      { _id: new ObjectId(userId) },
+      { _id: ObjectId.createFromHexString(userId) },
       { projection: { password: 0 } } // Hassas bilgileri hariç tut
     );
 
@@ -217,7 +248,7 @@ app.get('/userInfo/:userId', async (req, res) => {
 
     // Subscription bilgisini de ekle
     const subscription = await db.collection('subscriptions').findOne({
-      userId: new ObjectId(userId),
+      userId: ObjectId.createFromHexString(userId),
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
@@ -241,60 +272,49 @@ app.post('/preferences/:userId', requireActiveSubscription, async (req, res) => 
     const { userId } = req.params;
     const preferences = req.body;
     
-    // Input validation
+    // Gelen tercihlerin boş olmadığını kontrol et
     if (!preferences || Object.keys(preferences).length === 0) {
       return res.status(400).json({ error: 'Preferences data is required' });
+    }
+
+    // Geçerli bir ObjectId olduğunu kontrol et
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID' });
     }
 
     const db = await connectDB();
     const collection = db.collection('preferences');
     
-    // MongoDB ObjectId dönüşümünü kontrol et
-    let userObjectId;
-    try {
-      userObjectId = new ObjectId(userId);
-    } catch (error) {
-      return res.status(400).json({ error: 'Invalid user ID format' });
+    // Kullanıcının var olduğunu kontrol et
+    const userExists = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(userId) });
+    if (!userExists) {
+      return res.status(404).json({ error: 'User not found' });
     }
 
-    // Update işlemini daha detaylı hale getir
     const result = await collection.updateOne(
-      { userId: userObjectId },
+      { userId: ObjectId.createFromHexString(userId) },
       { 
-        $set: {
+        $set: { 
           ...preferences,
-          userId: userObjectId, // userId'yi tekrar ekle
-          updatedAt: new Date()
-        }
+          updatedAt: new Date(),
+          userId: ObjectId.createFromHexString(userId) // userId'yi de preferences içinde saklayalım
+        } 
       },
-      { 
-        upsert: true,
-        returnDocument: 'after' // Güncellenmiş dokümanı döndür
-      }
+      { upsert: true }
     );
 
-    // Update sonucunu kontrol et
-    if (result.matchedCount === 0 && !result.upsertedId) {
-      return res.status(404).json({ error: 'Failed to update preferences' });
+    if (result.acknowledged) {
+      res.json({ 
+        message: 'Preferences updated successfully',
+        modifiedCount: result.modifiedCount,
+        upsertedId: result.upsertedId
+      });
+    } else {
+      throw new Error('Database operation failed');
     }
-
-    // Güncellenmiş tercihleri al
-    const updatedPreferences = await collection.findOne({ userId: userObjectId });
-
-    // Başarılı yanıt döndür
-    res.json({ 
-      message: 'Preferences updated successfully',
-      preferences: updatedPreferences
-    });
-
   } catch (error) {
     console.error('Error updating preferences:', error);
-    // Daha detaylı hata mesajı
-    res.status(500).json({ 
-      error: 'Error updating preferences',
-      details: error.message,
-      code: error.code
-    });
+    res.status(500).json({ error: 'Error updating preferences', details: error.message });
   }
 });
 
@@ -304,7 +324,7 @@ app.get('/preferences/:userId', requireActiveSubscription, async (req, res) => {
     const db = await connectDB();
     const collection = db.collection('preferences');
     
-    const preferences = await collection.findOne({ userId: new ObjectId(userId) });
+    const preferences = await collection.findOne({ userId: ObjectId.createFromHexString(userId) });
     
     if (!preferences) {
       return res.status(404).json({ error: 'Preferences not found' });
@@ -333,7 +353,7 @@ app.post('/recipes', requireActiveSubscription, async (req, res) => {
       mealType,
       servings,
       content,
-      userId: new ObjectId(userId),
+      userId: ObjectId.createFromHexString(userId),
       preferences,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -358,7 +378,7 @@ app.get('/recipes/:userId', requireActiveSubscription, async (req, res) => {
     const db = await connectDB();
     const collection = db.collection('recipes');
     
-    const query = { userId: new ObjectId(userId) };
+    const query = { userId: ObjectId.createFromHexString(userId) };
     if (mealType) {
       query.mealType = mealType;
     }
@@ -397,8 +417,8 @@ app.get('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res
     const collection = db.collection('recipes');
     
     const recipe = await collection.findOne({
-      _id: new ObjectId(recipeId),
-      userId: new ObjectId(userId)
+      _id: ObjectId.createFromHexString(recipeId),
+      userId: ObjectId.createFromHexString(userId)
     });
 
     if (!recipe) {
@@ -425,8 +445,8 @@ app.put('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res
     
     const result = await collection.updateOne(
       {
-        _id: new ObjectId(recipeId),
-        userId: new ObjectId(userId)
+        _id: ObjectId.createFromHexString(recipeId),
+        userId: ObjectId.createFromHexString(userId)
       },
       {
         $set: {
@@ -455,8 +475,8 @@ app.delete('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, 
     const collection = db.collection('recipes');
     
     const result = await collection.deleteOne({
-      _id: new ObjectId(recipeId),
-      userId: new ObjectId(userId)
+      _id: ObjectId.createFromHexString(recipeId),
+      userId: ObjectId.createFromHexString(userId)
     });
 
     if (result.deletedCount === 0) {
@@ -479,7 +499,7 @@ app.get('/recipes/:userId/search', requireActiveSubscription, async (req, res) =
     const collection = db.collection('recipes');
     
     const searchQuery = {
-      userId: new ObjectId(userId)
+      userId: ObjectId.createFromHexString(userId)
     };
 
     if (query) {
@@ -545,10 +565,10 @@ app.post('/verify-subscription', async (req, res) => {
 
     // Save or update subscription information
     await subscriptionsCollection.updateOne(
-      { userId: new ObjectId(userId) },
+      { userId: ObjectId.createFromHexString(userId) },
       {
         $set: {
-          userId: new ObjectId(userId),
+          userId: ObjectId.createFromHexString(userId),
           productId,
           originalTransactionId: latestReceipt.original_transaction_id,
           latestTransactionId: latestReceipt.transaction_id,
@@ -579,7 +599,7 @@ app.get('/subscription-status/:userId', async (req, res) => {
     const subscriptionsCollection = db.collection('subscriptions');
 
     const subscription = await subscriptionsCollection.findOne({
-      userId: new ObjectId(userId)
+      userId: ObjectId.createFromHexString(userId)
     });
 
     if (!subscription) {
@@ -604,7 +624,7 @@ app.get('/subscription-status/:userId', async (req, res) => {
 
         // Update subscription status
         await subscriptionsCollection.updateOne(
-          { userId: new ObjectId(userId) },
+          { userId: ObjectId.createFromHexString(userId) },
           {
             $set: {
               expirationDate: newExpirationDate,
@@ -637,7 +657,7 @@ app.get('/feature-access/:userId', async (req, res) => {
     const db = await connectDB();
     
     const subscription = await db.collection('subscriptions').findOne({
-      userId: new ObjectId(userId),
+      userId: ObjectId.createFromHexString(userId),
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
@@ -660,10 +680,61 @@ app.get('/feature-access/:userId', async (req, res) => {
   }
 });
 
+app.delete('/users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const db = await connectDB();
+    
+    // Delete user and all related data
+    await Promise.all([
+      db.collection('users').deleteOne({ _id: ObjectId.createFromHexString(userId) }),
+      db.collection('preferences').deleteOne({ userId: ObjectId.createFromHexString(userId) }),
+      db.collection('recipes').deleteMany({ userId: ObjectId.createFromHexString(userId) }),
+      db.collection('subscriptions').deleteMany({ userId: ObjectId.createFromHexString(userId) }),
+      db.collection('aiInteractions').deleteMany({ userId: ObjectId.createFromHexString(userId) })
+    ]);
+
+    res.json({ message: 'User and related data deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ error: 'Error deleting user' });
+  }
+});
+
+app.get('/health', async (req, res) => {
+  try {
+    const db = await connectDB();
+    await db.command({ ping: 1 });
+    res.json({ 
+      status: 'healthy',
+      database: 'connected',
+      timestamp: new Date()
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'unhealthy',
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
+
+// Global error handler middleware
+app.use((err, req, res, next) => {
+  console.error('Global error:', err);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal Server Error',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
+
 process.on('SIGINT', async () => {
   try {
-    await mongoClient.close();
-    console.log('MongoDB connection closed.');
+    if (dbInstance) {
+      const client = dbInstance.client;
+      await client.close();
+      console.log('MongoDB connection closed.');
+    }
     process.exit(0);
   } catch (error) {
     console.error('Error during shutdown:', error);
