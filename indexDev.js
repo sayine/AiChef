@@ -76,14 +76,18 @@ async function connectDB() {
   if (dbInstance) return dbInstance;
 
   const client = new MongoClient(process.env.MONGODB_URI, {
-    retryWrites: true,
+    useNewUrlParser: true,
     useUnifiedTopology: true,
-    maxPoolSize: 10,
   });
-  await client.connect();
-  dbInstance = client.db(dbName);
-  console.log('Connected to MongoDB');
-  return dbInstance;
+
+  try {
+    await client.connect();
+    dbInstance = client.db(dbName);
+    return dbInstance;
+  } catch (error) {
+    console.error('MongoDB connection error:', error);
+    throw error;
+  }
 }
 
 // Add this after the MongoDB connection setup
@@ -92,12 +96,9 @@ const TRIAL_MAX_RECIPES = 3;
 // Modify the requireActiveSubscription middleware
 const requireActiveSubscription = async (req, res, next) => {
   try {
-    const userId = req.body.userId || req.params.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'User ID required' });
-    }
-
+    const { userId } = req.params;
     const db = await connectDB();
+    
     const subscription = await db.collection('subscriptions').findOne({
       userId: ObjectId.createFromHexString(userId),
       isActive: true,
@@ -110,8 +111,7 @@ const requireActiveSubscription = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error('Subscription check error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Error checking subscription' });
   }
 };
 
@@ -671,40 +671,47 @@ app.get('/feature-access/:userId', async (req, res) => {
 app.delete('/users/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+
     const db = await connectDB();
-    
-    // RevenueCat aboneliğini kontrol et ve iptal et
+    const userObjectId = ObjectId.createFromHexString(userId);
+
+    // Kullanıcıyı kontrol et
+    const user = await db.collection('users').findOne({ _id: userObjectId });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // RevenueCat aboneliğini kontrol et
     const subscription = await db.collection('subscriptions').findOne({
-      userId: ObjectId.createFromHexString(userId)
+      userId: userObjectId,
+      isActive: true
     });
 
-    if (subscription && subscription.isActive) {
-      // RevenueCat'te aboneliği iptal et
-      await axios.post(`https://api.revenuecat.com/v1/subscribers/${userId}/revoke`, null, {
-        headers: {
-          'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      });
+    if (subscription) {
+      try {
+        // RevenueCat'te aboneliği iptal et
+        await axios.post(`https://api.revenuecat.com/v1/subscribers/${userId}/revoke`, null, {
+          headers: {
+            'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        });
+      } catch (revenueCatError) {
+        console.error('RevenueCat error:', revenueCatError);
+        // RevenueCat hatası olsa bile devam et
+      }
     }
 
     // Kullanıcı ve ilgili tüm verileri sil
     await Promise.all([
-      db.collection('users').deleteOne({ 
-        _id: ObjectId.createFromHexString(userId) 
-      }),
-      db.collection('preferences').deleteOne({ 
-        userId: ObjectId.createFromHexString(userId) 
-      }),
-      db.collection('recipes').deleteMany({ 
-        userId: ObjectId.createFromHexString(userId) 
-      }),
-      db.collection('subscriptions').deleteMany({ 
-        userId: ObjectId.createFromHexString(userId) 
-      }),
-      db.collection('aiInteractions').deleteMany({ 
-        userId: ObjectId.createFromHexString(userId) 
-      })
+      db.collection('users').deleteOne({ _id: userObjectId }),
+      db.collection('preferences').deleteOne({ userId: userObjectId }),
+      db.collection('recipes').deleteMany({ userId: userObjectId }),
+      db.collection('subscriptions').deleteMany({ userId: userObjectId }),
+      db.collection('aiInteractions').deleteMany({ userId: userObjectId })
     ]);
 
     res.json({ success: true });
