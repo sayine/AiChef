@@ -21,7 +21,7 @@
     "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^3.1.0",
     "mongodb": "^6.10.0",
-    "node-apple-receipt-verify": "^1.13.0",
+    "node-apple-receipt-verify": "^1.13.0", 
     "openai": "^4.29.2"
   }
 }
