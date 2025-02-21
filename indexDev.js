@@ -9,6 +9,8 @@ const jwt = require('jsonwebtoken')
 const jwksClient = require('jwks-rsa')
 const app = express()
 const port = process.env.PORT || 3000 
+const REVENUECAT_API_KEY = process.env.REVENUECAT_API_KEY;
+const APPLE_SHARED_SECRET = process.env.APPLE_SHARED_SECRET;
 
 app.set('trust proxy', 1)
 app.use(express.json())
@@ -89,41 +91,26 @@ const TRIAL_MAX_RECIPES = 3;
 // Modify the requireActiveSubscription middleware
 const requireActiveSubscription = async (req, res, next) => {
   try {
-    const userId = req.body.userId || req.params.userId || req.query.userId;
-    
+    const userId = req.body.userId || req.params.userId;
     if (!userId) {
-      return res.status(401).json({ error: 'User ID is required' });
+      return res.status(401).json({ error: 'User ID required' });
     }
 
     const db = await connectDB();
-    const user = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(userId) });
-    
-    // Check for active paid subscription
     const subscription = await db.collection('subscriptions').findOne({
       userId: ObjectId.createFromHexString(userId),
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
 
-    if (subscription && !subscription.trialPeriod) {
-      return next(); // Paid subscription - full access
+    if (!subscription) {
+      return res.status(403).json({ error: 'Active subscription required' });
     }
 
-    // For trial users, check recipe count only for AI recipe endpoints
-    if (req.path.includes('/uemes171221')) {
-      if (user.trialRecipeCount >= TRIAL_MAX_RECIPES) {
-        return res.status(403).json({ 
-          error: 'Trial limit reached',
-          message: 'You have used all your trial recipe generations. Please subscribe for unlimited access.'
-        });
-      }
-    }
-
-    // Allow access for trial users
     next();
   } catch (error) {
     console.error('Subscription check error:', error);
-    res.status(500).json({ error: 'Error checking subscription status' });
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -745,3 +732,134 @@ process.on('SIGINT', async () => {
 app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
 });
+
+// RevenueCat webhook doğrulama middleware'i
+const verifyRevenueCatWebhook = (req, res, next) => {
+  const receivedApiKey = req.headers['authorization']?.replace('Bearer ', '');
+  
+  if (!receivedApiKey || receivedApiKey !== REVENUECAT_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  next();
+};
+
+// RevenueCat webhook endpoint - middleware ekleyelim
+app.post('/webhooks/revenuecat', verifyRevenueCatWebhook, async (req, res) => {
+  try {
+    const event = req.body;
+    const db = await connectDB();
+
+    // Webhook event'inin geçerliliğini kontrol et
+    if (!event.type || !event.app_user_id) {
+      return res.status(400).json({ error: 'Invalid webhook payload' });
+    }
+
+    switch (event.type) {
+      case 'INITIAL_PURCHASE':
+      case 'RENEWAL':
+        await db.collection('subscriptions').updateOne(
+          { userId: ObjectId.createFromHexString(event.app_user_id) },
+          {
+            $set: {
+              isActive: true,
+              productId: event.product_id,
+              expirationDate: new Date(event.expiration_at_ms),
+              environment: event.environment,
+              updatedAt: new Date(),
+              lastWebhookEvent: event.type,
+              lastWebhookTimestamp: new Date()
+            }
+          },
+          { upsert: true }
+        );
+        break;
+
+      case 'CANCELLATION':
+      case 'EXPIRATION':
+        await db.collection('subscriptions').updateOne(
+          { userId: ObjectId.createFromHexString(event.app_user_id) },
+          {
+            $set: {
+              isActive: false,
+              updatedAt: new Date(),
+              lastWebhookEvent: event.type,
+              lastWebhookTimestamp: new Date()
+            }
+          }
+        );
+        break;
+
+      default:
+        console.log('Unhandled webhook event type:', event.type);
+    }
+
+    res.status(200).json({ status: 'success' });
+  } catch (error) {
+    console.error('RevenueCat webhook error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Apple receipt validation endpoint
+app.post('/validate-receipt', async (req, res) => {
+  try {
+    const { receipt, userId } = req.body;
+    
+    // Önce production'da dene
+    let validationResponse = await validateReceipt(receipt, false);
+    
+    // Eğer sandbox receipt hatası alırsak, sandbox'da dene
+    if (validationResponse.status === 21007) {
+      validationResponse = await validateReceipt(receipt, true);
+    }
+
+    const db = await connectDB();
+    
+    if (validationResponse.status === 0) {
+      // Başarılı validation
+      const latestReceipt = validationResponse.latest_receipt_info[0];
+      
+      await db.collection('subscriptions').updateOne(
+        { userId: ObjectId.createFromHexString(userId) },
+        {
+          $set: {
+            isActive: true,
+            productId: latestReceipt.product_id,
+            expirationDate: new Date(latestReceipt.expires_date_ms),
+            environment: validationResponse.environment,
+            updatedAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+
+      res.json({
+        isValid: true,
+        expirationDate: new Date(latestReceipt.expires_date_ms)
+      });
+    } else {
+      res.json({
+        isValid: false,
+        status: validationResponse.status
+      });
+    }
+  } catch (error) {
+    console.error('Receipt validation error:', error);
+    res.status(500).json({ error: 'Receipt validation failed' });
+  }
+});
+
+async function validateReceipt(receipt, isSandbox) {
+  const endpoint = isSandbox
+    ? 'https://sandbox.itunes.apple.com/verifyReceipt'
+    : 'https://buy.itunes.apple.com/verifyReceipt';
+
+  const response = await axios.post(endpoint, {
+    'receipt-data': receipt,
+    'password': APPLE_SHARED_SECRET,
+    'exclude-old-transactions': true
+  });
+
+  return response.data;
+}
