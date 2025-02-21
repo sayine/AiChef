@@ -11,6 +11,7 @@ const app = express()
 const port = process.env.PORT || 3000 
 const REVENUECAT_API_KEY = process.env.REVENUECAT_API_KEY;
 const APPLE_SHARED_SECRET = process.env.APPLE_SHARED_SECRET;
+const axios = require('axios')
 
 app.set('trust proxy', 1)
 app.use(express.json())
@@ -672,19 +673,47 @@ app.delete('/users/:userId', async (req, res) => {
     const { userId } = req.params;
     const db = await connectDB();
     
-    // Delete user and all related data
+    // RevenueCat aboneliğini kontrol et ve iptal et
+    const subscription = await db.collection('subscriptions').findOne({
+      userId: ObjectId.createFromHexString(userId)
+    });
+
+    if (subscription && subscription.isActive) {
+      // RevenueCat'te aboneliği iptal et
+      await axios.post(`https://api.revenuecat.com/v1/subscribers/${userId}/revoke`, null, {
+        headers: {
+          'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+    }
+
+    // Kullanıcı ve ilgili tüm verileri sil
     await Promise.all([
-      db.collection('users').deleteOne({ _id: ObjectId.createFromHexString(userId) }),
-      db.collection('preferences').deleteOne({ userId: ObjectId.createFromHexString(userId) }),
-      db.collection('recipes').deleteMany({ userId: ObjectId.createFromHexString(userId) }),
-      db.collection('subscriptions').deleteMany({ userId: ObjectId.createFromHexString(userId) }),
-      db.collection('aiInteractions').deleteMany({ userId: ObjectId.createFromHexString(userId) })
+      db.collection('users').deleteOne({ 
+        _id: ObjectId.createFromHexString(userId) 
+      }),
+      db.collection('preferences').deleteOne({ 
+        userId: ObjectId.createFromHexString(userId) 
+      }),
+      db.collection('recipes').deleteMany({ 
+        userId: ObjectId.createFromHexString(userId) 
+      }),
+      db.collection('subscriptions').deleteMany({ 
+        userId: ObjectId.createFromHexString(userId) 
+      }),
+      db.collection('aiInteractions').deleteMany({ 
+        userId: ObjectId.createFromHexString(userId) 
+      })
     ]);
 
-    res.json({ message: 'User and related data deleted successfully' });
+    res.json({ success: true });
   } catch (error) {
     console.error('Error deleting user:', error);
-    res.status(500).json({ error: 'Error deleting user' });
+    res.status(500).json({ 
+      error: 'Error deleting user',
+      details: error.message 
+    });
   }
 });
 
