@@ -39,10 +39,12 @@ const verifyReceipt = require('node-apple-receipt-verify');
 //   MONTHLY: 'monthly_subscription',
 // };
 
-// Configure receipt verification
+// Configure receipt verification - daha detaylı yapılandırma
 verifyReceipt.config({
   secret: process.env.APPLE_SHARED_SECRET, // From App Store Connect
-  environment: process.env.NODE_ENV === 'production' ? 'production' : 'sandbox'
+  environment: process.env.NODE_ENV === 'production' ? 'production' : 'sandbox',
+  excludeOldTransactions: false, // Tüm işlemleri dahil et
+  verbose: true // Daha fazla log
 });
 
 // Apple Sign in için JWKS client
@@ -650,19 +652,53 @@ app.get('/recipes/:userId/search', requireActiveSubscription, async (req, res) =
   }
 });
 
+// Abonelik doğrulama endpoint'ini güncelleyelim
 app.post('/verify-subscription', async (req, res) => {
   try {
     const { userId, receipt, productId } = req.body;
     
+    console.log('Verifying subscription for userId:', userId);
+    console.log('Product ID:', productId);
+    
     if (!userId || !receipt || !productId) {
-      return res.status(400).json({ error: 'Missing required fields' });
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: {
+          userId: !!userId,
+          receipt: !!receipt,
+          productId: !!productId
+        }
+      });
     }
 
     // Verify receipt with Apple
-    const validationData = await verifyReceipt.validate({ receipt });
+    console.log('Validating receipt with Apple...');
+    let validationData;
+    try {
+      validationData = await verifyReceipt.validate({ receipt });
+      console.log('Receipt validation response:', JSON.stringify(validationData).substring(0, 200) + '...');
+    } catch (validationError) {
+      console.error('Receipt validation error:', validationError);
+      return res.status(400).json({ 
+        error: 'Receipt validation failed', 
+        details: validationError.message 
+      });
+    }
     
     if (!validationData.success) {
-      return res.status(400).json({ error: 'Invalid receipt' });
+      console.log('Invalid receipt, validation failed');
+      return res.status(400).json({ 
+        error: 'Invalid receipt',
+        details: validationData
+      });
+    }
+
+    if (!validationData.latest_receipt_info || validationData.latest_receipt_info.length === 0) {
+      console.log('No receipt info found in validation data');
+      return res.status(400).json({ 
+        error: 'No receipt information found',
+        details: 'The receipt does not contain subscription information'
+      });
     }
 
     const latestReceipt = validationData.latest_receipt_info[0];
@@ -670,12 +706,14 @@ app.post('/verify-subscription', async (req, res) => {
     // Check if the subscription is still valid
     const expirationDate = new Date(parseInt(latestReceipt.expires_date_ms));
     const isValid = expirationDate > new Date();
+    console.log('Subscription valid until:', expirationDate);
+    console.log('Is subscription currently valid:', isValid);
 
     const db = await connectDB();
     const subscriptionsCollection = db.collection('subscriptions');
 
     // Save or update subscription information
-    await subscriptionsCollection.updateOne(
+    const updateResult = await subscriptionsCollection.updateOne(
       { userId: ObjectId.createFromHexString(userId) },
       {
         $set: {
@@ -693,14 +731,25 @@ app.post('/verify-subscription', async (req, res) => {
       { upsert: true }
     );
 
+    console.log('Subscription updated in database:', updateResult.acknowledged);
+
     res.json({
       success: true,
       expirationDate,
-      isActive: isValid
+      isActive: isValid,
+      details: {
+        productId,
+        originalTransactionId: latestReceipt.original_transaction_id,
+        transactionId: latestReceipt.transaction_id
+      }
     });
   } catch (error) {
     console.error('Subscription verification error:', error);
-    res.status(500).json({ error: 'Error verifying subscription' });
+    res.status(500).json({ 
+      error: 'Error verifying subscription',
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -931,65 +980,115 @@ app.post('/webhooks/revenuecat', verifyRevenueCatWebhook, async (req, res) => {
   }
 });
 
-// Apple receipt validation endpoint
-app.post('/validate-receipt', async (req, res) => {
+// Alternatif doğrulama fonksiyonu ekleyelim
+async function validateAppleReceipt(receipt, isSandbox = false) {
   try {
-    const { receipt, userId } = req.body;
+    console.log('Validating Apple receipt in', isSandbox ? 'sandbox' : 'production');
     
+    const endpoint = isSandbox
+      ? 'https://sandbox.itunes.apple.com/verifyReceipt'
+      : 'https://buy.itunes.apple.com/verifyReceipt';
+
+    const response = await axios.post(endpoint, {
+      'receipt-data': receipt,
+      'password': process.env.APPLE_SHARED_SECRET,
+      'exclude-old-transactions': false
+    });
+
+    console.log('Apple validation response status:', response.status);
+    return response.data;
+  } catch (error) {
+    console.error('Apple receipt validation error:', error.message);
+    throw error;
+  }
+}
+
+// Yeni bir endpoint ekleyelim - alternatif doğrulama için
+app.post('/verify-subscription-alt', async (req, res) => {
+  try {
+    const { userId, receipt, productId } = req.body;
+    
+    if (!userId || !receipt || !productId) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
     // Önce production'da dene
-    let validationResponse = await validateReceipt(receipt, false);
+    let validationResponse;
+    try {
+      validationResponse = await validateAppleReceipt(receipt, false);
+    } catch (error) {
+      console.error('Production validation error:', error.message);
+    }
     
-    // Eğer sandbox receipt hatası alırsak, sandbox'da dene
-    if (validationResponse.status === 21007) {
-      validationResponse = await validateReceipt(receipt, true);
+    // Eğer sandbox receipt hatası alırsak veya hata olduysa, sandbox'da dene
+    if (!validationResponse || validationResponse.status === 21007) {
+      try {
+        validationResponse = await validateAppleReceipt(receipt, true);
+      } catch (error) {
+        console.error('Sandbox validation error:', error.message);
+        return res.status(500).json({ error: 'Receipt validation failed in both environments' });
+      }
+    }
+
+    if (!validationResponse || validationResponse.status !== 0) {
+      return res.status(400).json({
+        error: 'Invalid receipt',
+        status: validationResponse?.status,
+        message: getReceiptStatusMessage(validationResponse?.status)
+      });
     }
 
     const db = await connectDB();
     
-    if (validationResponse.status === 0) {
-      // Başarılı validation
-      const latestReceipt = validationResponse.latest_receipt_info[0];
-      
-      await db.collection('subscriptions').updateOne(
-        { userId: ObjectId.createFromHexString(userId) },
-        {
-          $set: {
-            isActive: true,
-            productId: latestReceipt.product_id,
-            expirationDate: new Date(latestReceipt.expires_date_ms),
-            environment: validationResponse.environment,
-            updatedAt: new Date()
-          }
-        },
-        { upsert: true }
-      );
-
-      res.json({
-        isValid: true,
-        expirationDate: new Date(latestReceipt.expires_date_ms)
-      });
-    } else {
-      res.json({
-        isValid: false,
-        status: validationResponse.status
-      });
+    // Başarılı validation
+    const latestReceiptInfo = validationResponse.latest_receipt_info;
+    if (!latestReceiptInfo || latestReceiptInfo.length === 0) {
+      return res.status(400).json({ error: 'No receipt information found' });
     }
+    
+    const latestReceipt = latestReceiptInfo[0];
+    
+    await db.collection('subscriptions').updateOne(
+      { userId: ObjectId.createFromHexString(userId) },
+      {
+        $set: {
+          isActive: true,
+          trialPeriod: false,
+          productId: latestReceipt.product_id,
+          expirationDate: new Date(parseInt(latestReceipt.expires_date_ms)),
+          environment: validationResponse.environment,
+          updatedAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    res.json({
+      isValid: true,
+      expirationDate: new Date(parseInt(latestReceipt.expires_date_ms))
+    });
   } catch (error) {
-    console.error('Receipt validation error:', error);
-    res.status(500).json({ error: 'Receipt validation failed' });
+    console.error('Alternative receipt validation error:', error);
+    res.status(500).json({ error: 'Receipt validation failed', details: error.message });
   }
 });
 
-async function validateReceipt(receipt, isSandbox) {
-  const endpoint = isSandbox
-    ? 'https://sandbox.itunes.apple.com/verifyReceipt'
-    : 'https://buy.itunes.apple.com/verifyReceipt';
-
-  const response = await axios.post(endpoint, {
-    'receipt-data': receipt,
-    'password': APPLE_SHARED_SECRET,
-    'exclude-old-transactions': true
-  });
-
-  return response.data;
+// Apple receipt status kodlarını açıklayan yardımcı fonksiyon
+function getReceiptStatusMessage(status) {
+  const statusMessages = {
+    0: 'Success',
+    21000: 'The App Store could not read the JSON object you provided.',
+    21002: 'The data in the receipt-data property was malformed or missing.',
+    21003: 'The receipt could not be authenticated.',
+    21004: 'The shared secret you provided does not match the shared secret on file for your account.',
+    21005: 'The receipt server is not currently available.',
+    21006: 'This receipt is valid but the subscription has expired.',
+    21007: 'This receipt is from the test environment, but it was sent to the production environment for verification.',
+    21008: 'This receipt is from the production environment, but it was sent to the test environment for verification.',
+    21010: 'This receipt could not be authorized. Treat this the same as if a purchase was never made.',
+    21100: 'Internal data access error.',
+    21199: 'Unknown error.'
+  };
+  
+  return statusMessages[status] || `Unknown status code: ${status}`;
 }
