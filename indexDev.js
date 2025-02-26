@@ -779,25 +779,21 @@ app.delete('/users/:userId', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // RevenueCat aboneliğini kontrol et
-    const subscription = await db.collection('subscriptions').findOne({
-      userId: userObjectId,
-      isActive: true
-    });
-
-    if (subscription) {
-      try {
-        // RevenueCat'te aboneliği iptal et
-        await axios.post(`https://api.revenuecat.com/v1/subscribers/${userId}/revoke`, null, {
+    // RevenueCat API çağrısını try-catch içine alıp, hata durumunda işleme devam et
+    try {
+      // RevenueCat'te aboneliği iptal etmeye çalış (opsiyonel)
+      if (process.env.NODE_ENV === 'production' && REVENUECAT_API_KEY) {
+        await axios.post(`https://api.revenuecat.com/v1/subscribers/${user.appleId || userId}/revoke`, null, {
           headers: {
             'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
             'Content-Type': 'application/json'
           }
         });
-      } catch (revenueCatError) {
-        console.error('RevenueCat error:', revenueCatError);
-        // RevenueCat hatası olsa bile devam et
+        console.log('RevenueCat subscription revoked successfully');
       }
+    } catch (revenueCatError) {
+      // Sadece loglama yap, işlemi durdurmadan devam et
+      console.error('RevenueCat API error (non-critical):', revenueCatError.message);
     }
 
     // Kullanıcı ve ilgili tüm verileri sil
@@ -809,7 +805,10 @@ app.delete('/users/:userId', async (req, res) => {
       db.collection('aiInteractions').deleteMany({ userId: userObjectId })
     ]);
 
-    res.json({ success: true });
+    res.json({ 
+      success: true,
+      message: 'User and all associated data deleted successfully'
+    });
   } catch (error) {
     console.error('Error deleting user:', error);
     res.status(500).json({ 
