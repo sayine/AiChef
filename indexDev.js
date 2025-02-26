@@ -142,7 +142,7 @@ const requireActiveSubscription = async (req, res, next) => {
   }
 };
 
-// AI endpoint'ini güncelleyelim - middleware'i kullanarak sadeleştirelim
+// AI endpoint'ini güncelleyelim - daha savunmacı bir yaklaşımla
 app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
   try {
     const { message, userId } = req.body;
@@ -155,7 +155,15 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
       });
     }
 
-    // Middleware zaten subscription kontrolü yaptı, req.subscription'ı kullanabiliriz
+    // Middleware'den gelen subscription bilgisini kontrol et
+    if (!req.subscription) {
+      console.error('Subscription object not found in request');
+      return res.status(500).json({ 
+        error: 'Server configuration error',
+        details: 'Subscription information is missing'
+      });
+    }
+
     const db = await connectDB();
     const user = await db.collection('users').findOne(
       { _id: ObjectId.createFromHexString(userId) }
@@ -165,9 +173,13 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Trial period checks - middleware'den gelen subscription bilgisini kullan
-    if (req.subscription.trialPeriod) {
+    // Trial period checks - daha güvenli kontrol
+    const isTrial = req.subscription.trialPeriod === true;
+    
+    if (isTrial) {
       const trialCount = user.trialRecipeCount || 0;
+      console.log(`User ${userId} has used ${trialCount} of ${TRIAL_MAX_RECIPES} trial recipes`);
+      
       if (trialCount >= TRIAL_MAX_RECIPES) {
         return res.status(403).json({ 
           error: 'Trial limit reached',
@@ -188,11 +200,11 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
       message,
       response: completion.choices[0].message.content,
       timestamp: new Date(),
-      subscriptionType: req.subscription.trialPeriod ? 'trial' : 'paid'
+      subscriptionType: isTrial ? 'trial' : 'paid'
     });
 
     // Update trial count if needed
-    if (req.subscription.trialPeriod) {
+    if (isTrial) {
       await db.collection('users').updateOne(
         { _id: ObjectId.createFromHexString(userId) },
         { $inc: { trialRecipeCount: 1 } }
@@ -201,7 +213,7 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
 
     res.json({ 
       response: completion.choices[0].message.content,
-      remainingTrialRequests: req.subscription.trialPeriod ? 
+      remainingTrialRequests: isTrial ? 
         TRIAL_MAX_RECIPES - (user.trialRecipeCount + 1) : 
         'unlimited'
     });
