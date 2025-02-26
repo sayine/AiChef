@@ -961,6 +961,7 @@ app.post('/webhooks/revenuecat', verifyRevenueCatWebhook, async (req, res) => {
           {
             $set: {
               isActive: true,
+              trialPeriod: false,
               productId: event.product_id,
               expirationDate: new Date(event.expiration_at_ms),
               environment: event.environment,
