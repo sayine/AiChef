@@ -96,9 +96,16 @@ const TRIAL_MAX_RECIPES = 3;
 // Middleware'i güncelleyelim
 const requireActiveSubscription = async (req, res, next) => {
   try {
-    const { userId } = req.params || req.body; // Both params and body'den kontrol
+    // userId'yi daha kapsamlı bir şekilde kontrol edelim
+    const userId = req.params.userId || req.body.userId || req.query.userId;
+    
     if (!userId) {
-      console.error('No userId provided');
+      console.error('No userId provided in request:', {
+        path: req.path,
+        method: req.method,
+        params: req.params,
+        body: req.body ? Object.keys(req.body) : null
+      });
       return res.status(400).json({ error: 'User ID is required' });
     }
 
