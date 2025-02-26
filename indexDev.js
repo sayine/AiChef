@@ -96,7 +96,6 @@ const TRIAL_MAX_RECIPES = 3;
 // Middleware'i güncelleyelim
 const requireActiveSubscription = async (req, res, next) => {
   try {
-    // userId'yi daha kapsamlı bir şekilde kontrol edelim
     const userId = req.params.userId || req.body.userId || req.query.userId;
     
     if (!userId) {
@@ -112,27 +111,59 @@ const requireActiveSubscription = async (req, res, next) => {
     const db = await connectDB();
     console.log('Checking subscription for userId:', userId);
     
-    const subscription = await db.collection('subscriptions').findOne({
+    // Önce ücretli aboneliği kontrol et
+    const paidSubscription = await db.collection('subscriptions').findOne({
       userId: ObjectId.createFromHexString(userId),
       isActive: true,
-      $or: [
-        { expirationDate: { $gt: new Date() } },
-        { trialPeriod: true }
-      ]
+      trialPeriod: { $ne: true },  // Trial period olmayan
+      expirationDate: { $gt: new Date() }
     });
-
-    console.log('Subscription status:', subscription ? 'Active' : 'Inactive');
-
-    if (!subscription) {
-      return res.status(403).json({ 
-        error: 'Active subscription required',
-        details: 'No active subscription found'
-      });
+    
+    // Ücretli abonelik varsa, doğrudan erişim ver
+    if (paidSubscription) {
+      console.log('User has active paid subscription');
+      req.subscription = paidSubscription;
+      return next();
     }
-
-    // Add subscription to request object for later use
-    req.subscription = subscription;
-    next();
+    
+    // Ücretli abonelik yoksa, deneme süresini kontrol et
+    const trialSubscription = await db.collection('subscriptions').findOne({
+      userId: ObjectId.createFromHexString(userId),
+      isActive: true,
+      trialPeriod: true
+    });
+    
+    if (trialSubscription) {
+      console.log('User has trial subscription');
+      
+      // Deneme süresi için kullanım limitini kontrol et
+      if (req.path.includes('/uemes171221')) {
+        const user = await db.collection('users').findOne(
+          { _id: ObjectId.createFromHexString(userId) }
+        );
+        
+        const trialCount = user?.trialRecipeCount || 0;
+        console.log(`User has used ${trialCount} of ${TRIAL_MAX_RECIPES} trial recipes`);
+        
+        if (trialCount >= TRIAL_MAX_RECIPES) {
+          return res.status(403).json({ 
+            error: 'Trial limit reached',
+            details: 'Please upgrade to continue generating recipes'
+          });
+        }
+      }
+      
+      req.subscription = trialSubscription;
+      return next();
+    }
+    
+    // Hiçbir aktif abonelik yoksa, erişimi reddet
+    console.log('No active subscription found');
+    return res.status(403).json({ 
+      error: 'Active subscription required',
+      details: 'No active subscription found'
+    });
+    
   } catch (error) {
     console.error('Subscription check error:', error);
     res.status(500).json({ 
@@ -654,6 +685,7 @@ app.post('/verify-subscription', async (req, res) => {
           latestTransactionId: latestReceipt.transaction_id,
           expirationDate,
           isActive: isValid,
+          trialPeriod: false,  // Ücretli abonelik olduğu için trial period'u false yap
           receipt: receipt,
           updatedAt: new Date()
         }
