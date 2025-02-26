@@ -390,32 +390,61 @@ app.post('/recipes', requireActiveSubscription, async (req, res) => {
   try {
     const { title, mealType, servings, content, userId, preferences } = req.body;
     
-    if (!content || !userId || !mealType) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    // userId kontrolünü daha detaylı yapalım
+    if (!userId) {
+      console.error('Save Recipe Error: No userId provided in request body');
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: 'userId is required'
+      });
+    }
+
+    if (!content || !mealType) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: 'content and mealType are required'
+      });
     }
 
     const db = await connectDB();
     const collection = db.collection('recipes');
     
-    const recipe = {
-      title,
-      mealType,
-      servings,
-      content,
-      userId: ObjectId.createFromHexString(userId),
-      preferences,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
+    // ObjectId dönüşümünü try-catch içine alalım
+    try {
+      const userObjectId = ObjectId.createFromHexString(userId);
+      
+      const recipe = {
+        title,
+        mealType,
+        servings,
+        content,
+        userId: userObjectId,
+        preferences,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
 
-    const result = await collection.insertOne(recipe);
-    res.status(201).json({ 
-      message: 'Recipe saved successfully',
-      recipeId: result.insertedId 
-    });
+      const result = await collection.insertOne(recipe);
+      console.log('Recipe saved successfully for userId:', userId);
+      
+      res.status(201).json({ 
+        success: true,
+        message: 'Recipe saved successfully',
+        recipeId: result.insertedId 
+      });
+    } catch (idError) {
+      console.error('Invalid userId format:', userId);
+      return res.status(400).json({ 
+        error: 'Invalid userId format',
+        details: idError.message 
+      });
+    }
   } catch (error) {
     console.error('Error saving recipe:', error);
-    res.status(500).json({ error: 'Error saving recipe' });
+    res.status(500).json({ 
+      error: 'Error saving recipe',
+      details: error.message 
+    });
   }
 });
 
