@@ -93,74 +93,135 @@ async function connectDB() {
 // Add this after the MongoDB connection setup
 const TRIAL_MAX_RECIPES = 3;
 
-// Modify the requireActiveSubscription middleware
+// Middleware'i güncelleyelim
 const requireActiveSubscription = async (req, res, next) => {
   try {
-    const { userId } = req.params;
+    const { userId } = req.params || req.body; // Both params and body'den kontrol
+    if (!userId) {
+      console.error('No userId provided');
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
     const db = await connectDB();
+    console.log('Checking subscription for userId:', userId);
     
     const subscription = await db.collection('subscriptions').findOne({
       userId: ObjectId.createFromHexString(userId),
       isActive: true,
-      expirationDate: { $gt: new Date() }
+      $or: [
+        { expirationDate: { $gt: new Date() } },
+        { trialPeriod: true }
+      ]
     });
 
+    console.log('Subscription status:', subscription ? 'Active' : 'Inactive');
+
     if (!subscription) {
-      return res.status(403).json({ error: 'Active subscription required' });
+      return res.status(403).json({ 
+        error: 'Active subscription required',
+        details: 'No active subscription found'
+      });
     }
 
+    // Add subscription to request object for later use
+    req.subscription = subscription;
     next();
   } catch (error) {
-    res.status(500).json({ error: 'Error checking subscription' });
+    console.error('Subscription check error:', error);
+    res.status(500).json({ 
+      error: 'Error checking subscription',
+      details: error.message 
+    });
   }
 };
 
-// Modify the AI endpoint to track recipe count
-app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
+// AI endpoint'ini güncelleyelim
+app.post('/uemes171221', async (req, res) => {
   try {
     const { message, userId } = req.body;
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
+    
+    // Input validation
+    if (!message || !userId) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: 'Both message and userId are required'
+      });
     }
 
+    // Check subscription first
     const db = await connectDB();
-    const user = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(userId) });
-    
-    // Only increment count for trial users
     const subscription = await db.collection('subscriptions').findOne({
       userId: ObjectId.createFromHexString(userId),
       isActive: true,
-      trialPeriod: true
+      $or: [
+        { expirationDate: { $gt: new Date() } },
+        { trialPeriod: true }
+      ]
     });
 
-    if (subscription) {
+    if (!subscription) {
+      return res.status(403).json({ 
+        error: 'Active subscription required',
+        details: 'No active subscription found'
+      });
+    }
+
+    // Get user info
+    const user = await db.collection('users').findOne(
+      { _id: ObjectId.createFromHexString(userId) }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Trial period checks
+    if (subscription.trialPeriod) {
+      const trialCount = user.trialRecipeCount || 0;
+      if (trialCount >= TRIAL_MAX_RECIPES) {
+        return res.status(403).json({ 
+          error: 'Trial limit reached',
+          details: 'Please upgrade to continue generating recipes'
+        });
+      }
+    }
+
+    // Generate AI response
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "user", content: message }],
+    });
+
+    // Log interaction
+    await db.collection('aiInteractions').insertOne({
+      userId: ObjectId.createFromHexString(userId),
+      message,
+      response: completion.choices[0].message.content,
+      timestamp: new Date(),
+      subscriptionType: subscription.trialPeriod ? 'trial' : 'paid'
+    });
+
+    // Update trial count if needed
+    if (subscription.trialPeriod) {
       await db.collection('users').updateOne(
         { _id: ObjectId.createFromHexString(userId) },
         { $inc: { trialRecipeCount: 1 } }
       );
     }
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [{ role: "user", content: message }],
-    });
-
-    await db.collection('aiInteractions').insertOne({
-      userId: ObjectId.createFromHexString(userId),
-      message,
-      response: completion.choices[0].message.content,
-      timestamp: new Date()
-    });
-
     res.json({ 
       response: completion.choices[0].message.content,
-      remainingTrialRequests: subscription ? 
+      remainingTrialRequests: subscription.trialPeriod ? 
         TRIAL_MAX_RECIPES - (user.trialRecipeCount + 1) : 
         'unlimited'
     });
+
   } catch (error) {
-    console.error('OpenAI API Error:', error);
-    res.status(500).json({ error: 'Error processing your request' });
+    console.error('AI Generation Error:', error);
+    res.status(500).json({ 
+      error: 'Error processing request',
+      details: error.message
+    });
   }
 });
 
@@ -580,61 +641,32 @@ app.post('/verify-subscription', async (req, res) => {
   }
 });
 
+// Subscription status endpoint'ini de kontrol edelim
 app.get('/subscription-status/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const db = await connectDB();
-    const subscriptionsCollection = db.collection('subscriptions');
-
-    const subscription = await subscriptionsCollection.findOne({
-      userId: ObjectId.createFromHexString(userId)
+    
+    const subscription = await db.collection('subscriptions').findOne({
+      userId: ObjectId.createFromHexString(userId),
+      isActive: true,
+      $or: [
+        { expirationDate: { $gt: new Date() } },
+        { trialPeriod: true }
+      ]
     });
 
-    if (!subscription) {
-      return res.json({
-        isActive: false,
-        message: 'No subscription found'
-      });
-    }
-
-    // Check if subscription needs renewal verification
-    const now = new Date();
-    if (subscription.isActive && subscription.expirationDate < now) {
-      // Verify with Apple again
-      const validationData = await verifyReceipt.validate({ 
-        receipt: subscription.receipt 
-      });
-
-      if (validationData.success) {
-        const latestReceipt = validationData.latest_receipt_info[0];
-        const newExpirationDate = new Date(parseInt(latestReceipt.expires_date_ms));
-        const isStillValid = newExpirationDate > now;
-
-        // Update subscription status
-        await subscriptionsCollection.updateOne(
-          { userId: ObjectId.createFromHexString(userId) },
-          {
-            $set: {
-              expirationDate: newExpirationDate,
-              isActive: isStillValid,
-              updatedAt: now
-            }
-          }
-        );
-
-        return res.json({
-          isActive: isStillValid,
-          expirationDate: newExpirationDate
-        });
-      }
-    }
+    console.log('Subscription check for userId:', userId, 'Result:', subscription);
 
     res.json({
-      isActive: subscription.isActive,
-      expirationDate: subscription.expirationDate
+      isActive: !!subscription,
+      type: subscription?.trialPeriod ? 'trial' : 'paid',
+      expirationDate: subscription?.expirationDate,
+      details: subscription || 'No active subscription found'
     });
+
   } catch (error) {
-    console.error('Error checking subscription status:', error);
+    console.error('Subscription status check error:', error);
     res.status(500).json({ error: 'Error checking subscription status' });
   }
 });
