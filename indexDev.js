@@ -945,11 +945,11 @@ const verifyRevenueCatWebhook = (req, res, next) => {
 // RevenueCat webhook endpoint - middleware ekleyelim
 app.post('/webhooks/revenuecat', verifyRevenueCatWebhook, async (req, res) => {
   try {
-    const event = req.body;
+    const { event } = req.body;
     const db = await connectDB();
 
     // Webhook event'inin geçerliliğini kontrol et
-    if (!event.type || !event.app_user_id) {
+    if (!event || !event.type || !event.app_user_id) {
       return res.status(400).json({ error: 'Invalid webhook payload' });
     }
 
@@ -957,7 +957,7 @@ app.post('/webhooks/revenuecat', verifyRevenueCatWebhook, async (req, res) => {
       case 'INITIAL_PURCHASE':
       case 'RENEWAL':
         await db.collection('subscriptions').updateOne(
-          { userId: ObjectId.createFromHexString(event.app_user_id) },
+          { userId: event.app_user_id },
           {
             $set: {
               isActive: true,
