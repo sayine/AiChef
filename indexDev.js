@@ -115,7 +115,7 @@ const requireActiveSubscription = async (req, res, next) => {
     
     // Önce ücretli aboneliği kontrol et
     const paidSubscription = await db.collection('subscriptions').findOne({
-      userId: ObjectId.createFromHexString(userId),
+      userId: userId,
       isActive: true,
       trialPeriod: { $ne: true },  // Trial period olmayan
       expirationDate: { $gt: new Date() }
@@ -130,7 +130,7 @@ const requireActiveSubscription = async (req, res, next) => {
     
     // Ücretli abonelik yoksa, deneme süresini kontrol et
     const trialSubscription = await db.collection('subscriptions').findOne({
-      userId: ObjectId.createFromHexString(userId),
+      userId: userId,
       isActive: true,
       trialPeriod: true
     });
@@ -141,7 +141,7 @@ const requireActiveSubscription = async (req, res, next) => {
       // Deneme süresi için kullanım limitini kontrol et
       if (req.path.includes('/uemes171221')) {
         const user = await db.collection('users').findOne(
-          { _id: ObjectId.createFromHexString(userId) }
+          { _id: userId }
         );
         
         const trialCount = user?.trialRecipeCount || 0;
@@ -199,7 +199,7 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
 
     const db = await connectDB();
     const user = await db.collection('users').findOne(
-      { _id: ObjectId.createFromHexString(userId) }
+      { _id: userId }
     );
 
     if (!user) {
@@ -229,7 +229,7 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
 
     // Log interaction
     await db.collection('aiInteractions').insertOne({
-      userId: ObjectId.createFromHexString(userId),
+      userId: userId,
       message,
       response: completion.choices[0].message.content,
       timestamp: new Date(),
@@ -239,7 +239,7 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
     // Update trial count if needed
     if (isTrial) {
       await db.collection('users').updateOne(
-        { _id: ObjectId.createFromHexString(userId) },
+        { _id: userId },
         { $inc: { trialRecipeCount: 1 } }
       );
     }
@@ -322,7 +322,7 @@ app.get('/userInfo/:userId', async (req, res) => {
     const collection = db.collection('users');
     
     const user = await collection.findOne(
-      { _id: ObjectId.createFromHexString(userId) },
+      { _id: userId },
       { projection: { password: 0 } } // Hassas bilgileri hariç tut
     );
 
@@ -332,7 +332,7 @@ app.get('/userInfo/:userId', async (req, res) => {
 
     // Subscription bilgisini de ekle
     const subscription = await db.collection('subscriptions').findOne({
-      userId: ObjectId.createFromHexString(userId),
+      userId: userId,
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
@@ -362,7 +362,7 @@ app.post('/preferences/:userId', requireActiveSubscription, async (req, res) => 
     }
 
     // Geçerli bir ObjectId olduğunu kontrol et
-    if (!ObjectId.isValid(userId)) {
+    if (!userId) {
       return res.status(400).json({ error: 'Invalid user ID' });
     }
 
@@ -370,18 +370,18 @@ app.post('/preferences/:userId', requireActiveSubscription, async (req, res) => 
     const collection = db.collection('preferences');
     
     // Kullanıcının var olduğunu kontrol et
-    const userExists = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(userId) });
+    const userExists = await db.collection('users').findOne({ _id: userId });
     if (!userExists) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     const result = await collection.updateOne(
-      { userId: ObjectId.createFromHexString(userId) },
+      { userId: userId },
       { 
         $set: { 
           ...preferences,
           updatedAt: new Date(),
-          userId: ObjectId.createFromHexString(userId) // userId'yi de preferences içinde saklayalım
+          userId: userId // userId'yi de preferences içinde saklayalım
         } 
       },
       { upsert: true }
@@ -408,7 +408,7 @@ app.get('/preferences/:userId', requireActiveSubscription, async (req, res) => {
     const db = await connectDB();
     const collection = db.collection('preferences');
     
-    const preferences = await collection.findOne({ userId: ObjectId.createFromHexString(userId) });
+    const preferences = await collection.findOne({ userId: userId });
     
     if (!preferences) {
       return res.status(404).json({ error: 'Preferences not found' });
@@ -446,7 +446,7 @@ app.post('/recipes', requireActiveSubscription, async (req, res) => {
     
     // ObjectId dönüşümünü try-catch içine alalım
     try {
-      const userObjectId = ObjectId.createFromHexString(userId);
+      const userObjectId = userId;
       
       const recipe = {
         title,
@@ -491,7 +491,7 @@ app.get('/recipes/:userId', requireActiveSubscription, async (req, res) => {
     const db = await connectDB();
     const collection = db.collection('recipes');
     
-    const query = { userId: ObjectId.createFromHexString(userId) };
+    const query = { userId: userId };
     if (mealType) {
       query.mealType = mealType;
     }
@@ -531,7 +531,7 @@ app.get('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res
     
     const recipe = await collection.findOne({
       _id: ObjectId.createFromHexString(recipeId),
-      userId: ObjectId.createFromHexString(userId)
+      userId: userId
     });
 
     if (!recipe) {
@@ -559,7 +559,7 @@ app.put('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res
     const result = await collection.updateOne(
       {
         _id: ObjectId.createFromHexString(recipeId),
-        userId: ObjectId.createFromHexString(userId)
+        userId: userId
       },
       {
         $set: {
@@ -589,7 +589,7 @@ app.delete('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, 
     
     const result = await collection.deleteOne({
       _id: ObjectId.createFromHexString(recipeId),
-      userId: ObjectId.createFromHexString(userId)
+      userId: userId
     });
 
     if (result.deletedCount === 0) {
@@ -612,7 +612,7 @@ app.get('/recipes/:userId/search', requireActiveSubscription, async (req, res) =
     const collection = db.collection('recipes');
     
     const searchQuery = {
-      userId: ObjectId.createFromHexString(userId)
+      userId: userId
     };
 
     if (query) {
@@ -683,7 +683,7 @@ app.post('/verify-subscription', async (req, res) => {
       // Doğrulama hatası olsa bile, aboneliği aktifleştir
       const db = await connectDB();
       await db.collection('subscriptions').updateOne(
-        { userId: ObjectId.createFromHexString(userId) },
+        { userId: userId },
         {
           $set: {
             isActive: true,
@@ -711,7 +711,7 @@ app.post('/verify-subscription', async (req, res) => {
       // Doğrulama başarısız olsa bile, aboneliği aktifleştir
       const db = await connectDB();
       await db.collection('subscriptions').updateOne(
-        { userId: ObjectId.createFromHexString(userId) },
+        { userId: userId },
         {
           $set: {
             isActive: true,
@@ -735,16 +735,16 @@ app.post('/verify-subscription', async (req, res) => {
     // Başarılı doğrulama durumu - normal işlem
     const db = await connectDB();
     const updateResult = await db.collection('subscriptions').updateOne(
-      { userId: ObjectId.createFromHexString(userId) },
+      { userId: userId },
       {
         $set: {
-          userId: ObjectId.createFromHexString(userId),
+          userId: userId,
           productId,
           originalTransactionId: validationData.latest_receipt_info?.[0]?.original_transaction_id,
           latestTransactionId: validationData.latest_receipt_info?.[0]?.transaction_id,
           expirationDate: validationData.latest_receipt_info?.[0]?.expires_date_ms ? 
                          new Date(parseInt(validationData.latest_receipt_info[0].expires_date_ms)) : 
-                         new Date(Date.now() + (365 * 24 * 60 * 60 * 1000)),
+                         new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)),
           isActive: true,
           trialPeriod: false,  // Her durumda trial period'u false yap
           receipt: receipt,
@@ -761,7 +761,7 @@ app.post('/verify-subscription', async (req, res) => {
       message: 'Subscription activated successfully',
       expirationDate: validationData.latest_receipt_info?.[0]?.expires_date_ms ? 
                      new Date(parseInt(validationData.latest_receipt_info[0].expires_date_ms)) : 
-                     new Date(Date.now() + (365 * 24 * 60 * 60 * 1000))
+                     new Date(Date.now() + (7 * 24 * 60 * 60 * 1000))
     });
   } catch (error) {
     console.error('Subscription verification error:', error);
@@ -779,7 +779,7 @@ app.get('/subscription-status/:userId', async (req, res) => {
     const db = await connectDB();
     
     const subscription = await db.collection('subscriptions').findOne({
-      userId: ObjectId.createFromHexString(userId),
+      userId: userId,
       isActive: true,
       $or: [
         { expirationDate: { $gt: new Date() } },
@@ -808,7 +808,7 @@ app.get('/feature-access/:userId', async (req, res) => {
     const db = await connectDB();
     
     const subscription = await db.collection('subscriptions').findOne({
-      userId: ObjectId.createFromHexString(userId),
+      userId: userId,
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
@@ -834,12 +834,12 @@ app.get('/feature-access/:userId', async (req, res) => {
 app.delete('/users/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    if (!ObjectId.isValid(userId)) {
+    if (!userId) {
       return res.status(400).json({ error: 'Invalid user ID format' });
     }
 
     const db = await connectDB();
-    const userObjectId = ObjectId.createFromHexString(userId);
+    const userObjectId = userId;
 
     // Kullanıcıyı kontrol et
     const user = await db.collection('users').findOne({ _id: userObjectId });
@@ -977,7 +977,7 @@ app.post('/webhooks/revenuecat', verifyRevenueCatWebhook, async (req, res) => {
       case 'CANCELLATION':
       case 'EXPIRATION':
         await db.collection('subscriptions').updateOne(
-          { userId: ObjectId.createFromHexString(event.app_user_id) },
+          { userId: event.app_user_id },
           {
             $set: {
               isActive: false,
