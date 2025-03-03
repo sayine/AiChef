@@ -293,7 +293,7 @@ app.post('/register', async (req, res) => {
     
     // Subscription collection'ında deneme süresi kaydı oluştur
     await db.collection('subscriptions').insertOne({
-      userId: result.insertedId,
+      userId: result.insertedId.toString(),
       isActive: true,
       trialPeriod: true,
       startDate: new Date(),
@@ -303,7 +303,7 @@ app.post('/register', async (req, res) => {
 
     res.status(201).json({ 
       message: 'User registered successfully',
-      userId: result.insertedId 
+      userId: result.insertedId.toString(),
     });
 
   } catch (error) {
