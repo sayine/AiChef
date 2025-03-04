@@ -175,91 +175,84 @@ const requireActiveSubscription = async (req, res, next) => {
   }
 };
 
-// AI endpoint'ini güncelleyelim - daha savunmacı bir yaklaşımla
-app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
+app.post('/register-anonymous', async (req, res) => {
   try {
-    const { message, userId } = req.body;
-    
-    // Input validation
-    if (!message) {
-      return res.status(400).json({ 
-        error: 'Missing required fields',
-        details: 'Message is required'
-      });
-    }
-
-    // Middleware'den gelen subscription bilgisini kontrol et
-    if (!req.subscription) {
-      console.error('Subscription object not found in request');
-      return res.status(500).json({ 
-        error: 'Server configuration error',
-        details: 'Subscription information is missing'
-      });
+    const { appUserId } = req.body;
+    if (!appUserId) {
+      return res.status(400).json({ error: 'appUserId is required' });
     }
 
     const db = await connectDB();
-    const user = await db.collection('users').findOne(
-      { _id: ObjectId.createFromHexString(userId) }
-    );
+    const existingUser = await db.collection('users').findOne({ appUserId });
 
+    if (existingUser) {
+      return res.json(existingUser);
+    }
+
+    const newUser = {
+      appUserId,
+      createdAt: new Date(),
+      trialRecipeCount: 0,
+      isAnonymous: true,
+    };
+
+    const result = await db.collection('users').insertOne(newUser);
+    res.json({ userId: result.insertedId, appUserId });
+  } catch (error) {
+    console.error('Anonymous registration error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/uemes171221', async (req, res) => {
+  try {
+    const { message, appUserId } = req.body;
+    if (!message || !appUserId) {
+      return res.status(400).json({ error: 'Message and appUserId are required' });
+    }
+
+    const db = await connectDB();
+    const user = await db.collection('users').findOne({ appUserId });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Trial period checks - daha güvenli kontrol
-    const isTrial = req.subscription.trialPeriod === true;
-    
-    if (isTrial) {
-      const trialCount = user.trialRecipeCount || 0;
-      console.log(`User ${userId} has used ${trialCount} of ${TRIAL_MAX_RECIPES} trial recipes`);
-      
-      if (trialCount >= TRIAL_MAX_RECIPES) {
-        return res.status(403).json({ 
-          error: 'Trial limit reached',
-          details: 'Please upgrade to continue generating recipes'
-        });
+    const subscription = await db.collection('subscriptions').findOne({
+      appUserId,
+      isActive: true,
+      expirationDate: { $gt: new Date() }
+    });
+
+    if (!subscription) {
+      const recipeCount = user.trialRecipeCount || 0;
+      if (recipeCount >= 3) {
+        return res.status(403).json({ error: 'Trial limit reached' });
       }
+
+      await db.collection('users').updateOne(
+        { appUserId },
+        { $inc: { trialRecipeCount: 1 } }
+      );
     }
 
-    // Generate AI response
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: message }],
     });
 
-    // Log interaction
     await db.collection('aiInteractions').insertOne({
-      userId: ObjectId.createFromHexString(userId),
+      appUserId,
       message,
       response: completion.choices[0].message.content,
-      timestamp: new Date(),
-      subscriptionType: isTrial ? 'trial' : 'paid'
+      timestamp: new Date()
     });
 
-    // Update trial count if needed
-    if (isTrial) {
-      await db.collection('users').updateOne(
-        { _id: ObjectId.createFromHexString(userId) },
-        { $inc: { trialRecipeCount: 1 } }
-      );
-    }
-
-    res.json({ 
-      response: completion.choices[0].message.content,
-      remainingTrialRequests: isTrial ? 
-        TRIAL_MAX_RECIPES - (user.trialRecipeCount + 1) : 
-        'unlimited'
-    });
-
+    res.json({ response: completion.choices[0].message.content });
   } catch (error) {
-    console.error('AI Generation Error:', error);
-    res.status(500).json({ 
-      error: 'Error processing request',
-      details: error.message
-    });
+    console.error('OpenAI API Error:', error);
+    res.status(500).json({ error: 'Error processing your request' });
   }
-});
-
+}); 
 app.post('/register', async (req, res) => {
   try {
     const { idToken, name, email } = req.body;
