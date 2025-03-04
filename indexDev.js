@@ -189,14 +189,28 @@ app.post('/register-anonymous', async (req, res) => {
       return res.json(existingUser);
     }
 
+    // Create a new user object similar to the register endpoint
     const newUser = {
       appUserId,
       createdAt: new Date(),
       trialRecipeCount: 0,
       isAnonymous: true,
+      // Add any additional fields that are present in the register endpoint
     };
 
     const result = await db.collection('users').insertOne(newUser);
+
+    // Create a trial subscription for the anonymous user
+    await db.collection('subscriptions').insertOne({
+      userId: result.insertedId.toString(),
+      appUserId,
+      isActive: true,
+      trialPeriod: true,
+      startDate: new Date(),
+      expirationDate: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)), // 7-day trial
+      createdAt: new Date()
+    });
+
     res.json({ userId: result.insertedId, appUserId });
   } catch (error) {
     console.error('Anonymous registration error:', error);
