@@ -115,7 +115,7 @@ const requireActiveSubscription = async (req, res, next) => {
     
     // Önce ücretli aboneliği kontrol et
     const paidSubscription = await db.collection('subscriptions').findOne({
-      userId: userId,
+      idToken: userId,
       isActive: true,
       trialPeriod: { $ne: true },  // Trial period olmayan
       expirationDate: { $gt: new Date() }
@@ -130,7 +130,7 @@ const requireActiveSubscription = async (req, res, next) => {
     
     // Ücretli abonelik yoksa, deneme süresini kontrol et
     const trialSubscription = await db.collection('subscriptions').findOne({
-      userId: userId,
+      idToken: userId,
       isActive: true,
       trialPeriod: true
     });
