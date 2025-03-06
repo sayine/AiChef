@@ -175,7 +175,7 @@ const requireActiveSubscription = async (req, res, next) => {
   }
 };
 
-app.post('/register-anonymous', async (req, res) => {
+app.post('/register', async (req, res) => {
   try {
     const { appUserId } = req.body;
     if (!appUserId) {
@@ -267,7 +267,7 @@ app.post('/uemes171221', async (req, res) => {
     res.status(500).json({ error: 'Error processing your request' });
   }
 }); 
-app.post('/register', async (req, res) => {
+app.post('/register-apple', async (req, res) => {
   try {
     const { idToken, name, email } = req.body;
     
