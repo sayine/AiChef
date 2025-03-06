@@ -203,7 +203,7 @@ app.post('/register', async (req, res) => {
     // Create a trial subscription for the anonymous user
     await db.collection('subscriptions').insertOne({
       userId: result.insertedId.toString(),
-      appUserId,
+      idToken,
       isActive: true,
       trialPeriod: true,
       startDate: new Date(),
