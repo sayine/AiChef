@@ -177,13 +177,13 @@ const requireActiveSubscription = async (req, res, next) => {
 
 app.post('/register', async (req, res) => {
   try {
-    const { appUserId } = req.body;
-    if (!appUserId) {
-      return res.status(400).json({ error: 'appUserId is required' });
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ error: 'idToken is required' });
     }
 
     const db = await connectDB();
-    const existingUser = await db.collection('users').findOne({ appUserId });
+    const existingUser = await db.collection('users').findOne({ idToken });
 
     if (existingUser) {
       return res.json(existingUser);
@@ -191,7 +191,7 @@ app.post('/register', async (req, res) => {
 
     // Create a new user object similar to the register endpoint
     const newUser = {
-      appUserId,
+      idToken,
       createdAt: new Date(),
       trialRecipeCount: 0,
       isAnonymous: true,
@@ -211,7 +211,7 @@ app.post('/register', async (req, res) => {
       createdAt: new Date()
     });
 
-    res.json({ userId: result.insertedId, appUserId });
+    res.json({ userId: result.insertedId, idToken });
   } catch (error) {
     console.error('Anonymous registration error:', error);
     res.status(500).json({ error: 'Internal server error' });
