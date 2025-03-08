@@ -183,7 +183,7 @@ app.post('/register', async (req, res) => {
     }
 
     const db = await connectDB();
-    const existingUser = await db.collection('users').findOne({ idToken });
+    const existingUser = await db.collection('users').findOne({ idToken: appUserId });
 
     if (existingUser) {
       return res.json(existingUser);
@@ -226,13 +226,13 @@ app.post('/uemes171221', async (req, res) => {
     }
 
     const db = await connectDB();
-    const user = await db.collection('users').findOne({ idToken });
+    const user = await db.collection('users').findOne({ idToken: appUserId });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     const subscription = await db.collection('subscriptions').findOne({
-      idToken,
+      idToken: appUserId,
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
@@ -244,7 +244,7 @@ app.post('/uemes171221', async (req, res) => {
       }
 
       await db.collection('users').updateOne(
-        { idToken },
+        { idToken: appUserId },
         { $inc: { trialRecipeCount: 1 } }
       );
     }
@@ -368,27 +368,22 @@ app.post('/preferences/:appUserId', requireActiveSubscription, async (req, res) 
       return res.status(400).json({ error: 'Preferences data is required' });
     }
 
-    // Geçerli bir ObjectId olduğunu kontrol et
-    if (!ObjectId.isValid(appUserId)) {
-      return res.status(400).json({ error: 'Invalid user ID' });
-    }
-
     const db = await connectDB();
     const collection = db.collection('preferences');
     
     // Kullanıcının var olduğunu kontrol et
-    const userExists = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(appUserId) });
+    const userExists = await db.collection('users').findOne({ idToken: appUserId});
     if (!userExists) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     const result = await collection.updateOne(
-      { userId: ObjectId.createFromHexString(appUserId) },
+      { idToken: appUserId },
       { 
         $set: { 
           ...preferences,
           updatedAt: new Date(),
-          userId: ObjectId.createFromHexString(appUserId) // userId'yi de preferences içinde saklayalım
+          userId: appUserId // userId'yi de preferences içinde saklayalım
         } 
       },
       { upsert: true }
@@ -415,7 +410,7 @@ app.get('/preferences/:appUserId', requireActiveSubscription, async (req, res) =
     const db = await connectDB();
     const collection = db.collection('preferences');
     
-    const preferences = await collection.findOne({ userId: ObjectId.createFromHexString(appUserId) });
+    const preferences = await collection.findOne({ idToken: appUserId });
     
     if (!preferences) {
       return res.status(404).json({ error: 'Preferences not found' });
@@ -453,14 +448,13 @@ app.post('/recipes', requireActiveSubscription, async (req, res) => {
     
     // ObjectId dönüşümünü try-catch içine alalım
     try {
-      const userObjectId = ObjectId.createFromHexString(appUserId);
       
       const recipe = {
         title,
         mealType,
         servings,
         content,
-        appUserId: userObjectId,
+        appUserId,
         preferences,
         createdAt: new Date(),
         updatedAt: new Date()
@@ -498,7 +492,7 @@ app.get('/recipes/:appUserId', requireActiveSubscription, async (req, res) => {
     const db = await connectDB();
     const collection = db.collection('recipes');
     
-    const query = { userId: ObjectId.createFromHexString(appUserId) };
+    const query = { appUserId };
     if (mealType) {
       query.mealType = mealType;
     }
@@ -538,7 +532,7 @@ app.get('/recipes/:appUserId/:recipeId', requireActiveSubscription, async (req, 
     
     const recipe = await collection.findOne({
       _id: ObjectId.createFromHexString(recipeId),
-      appUserId: ObjectId.createFromHexString(appUserId)
+      appUserId
     });
 
     if (!recipe) {
@@ -566,7 +560,7 @@ app.put('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res
     const result = await collection.updateOne(
       {
         _id: ObjectId.createFromHexString(recipeId),
-        userId: ObjectId.createFromHexString(appUserId)
+        appUserId
       },
       {
         $set: {
@@ -596,7 +590,7 @@ app.delete('/recipes/:appUserId/:recipeId', requireActiveSubscription, async (re
     
     const result = await collection.deleteOne({
       _id: ObjectId.createFromHexString(recipeId),
-      appUserId: ObjectId.createFromHexString(appUserId)
+      appUserId
     });
 
     if (result.deletedCount === 0) {
@@ -619,7 +613,7 @@ app.get('/recipes/:appUserId/search', requireActiveSubscription, async (req, res
     const collection = db.collection('recipes');
     
     const searchQuery = {
-      appUserId: ObjectId.createFromHexString(appUserId)
+      appUserId
     };
 
     if (query) {
@@ -786,7 +780,7 @@ app.get('/subscription-status/:userId', async (req, res) => {
     const db = await connectDB();
     
     const subscription = await db.collection('subscriptions').findOne({
-      idToken: ObjectId.createFromHexString(appUserId),
+      idToken: appUserId,
       isActive: true,
       $or: [
         { expirationDate: { $gt: new Date() } },
@@ -841,12 +835,9 @@ app.get('/feature-access/:userId', async (req, res) => {
 app.delete('/users/:appUserId', async (req, res) => {
   try {
     const { appUserId } = req.params;
-    if (!ObjectId.isValid(appUserId)) {
-      return res.status(400).json({ error: 'Invalid user ID format' });
-    }
 
     const db = await connectDB();
-    const userObjectId = ObjectId.createFromHexString(appUserId);
+    const userObjectId = appUserId;
 
     // Kullanıcıyı kontrol et
     const user = await db.collection('users').findOne({ idToken: userObjectId });
