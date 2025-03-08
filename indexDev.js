@@ -98,7 +98,7 @@ const TRIAL_MAX_RECIPES = 3;
 // Middleware'i güncelleyelim
 const requireActiveSubscription = async (req, res, next) => {
   try {
-    const userId = req.params.userId || req.body.userId || req.query.userId;
+    const userId = req.params.appUserId || req.body.appUserId || req.query.appUserId;
     
     if (!userId) {
       console.error('No userId provided in request:', {
@@ -141,7 +141,7 @@ const requireActiveSubscription = async (req, res, next) => {
       // Deneme süresi için kullanım limitini kontrol et
       if (req.path.includes('/uemes171221')) {
         const user = await db.collection('users').findOne(
-          { _id: userId }
+          { idToken: userId }
         );
         
         const trialCount = user?.trialRecipeCount || 0;
