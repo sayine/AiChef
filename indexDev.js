@@ -177,9 +177,9 @@ const requireActiveSubscription = async (req, res, next) => {
 
 app.post('/register', async (req, res) => {
   try {
-    const { idToken } = req.body;
-    if (!idToken) {
-      return res.status(400).json({ error: 'idToken is required' });
+    const { appUserId } = req.body;
+    if (!appUserId) {
+      return res.status(400).json({ error: 'appUserId is required' });
     }
 
     const db = await connectDB();
@@ -191,7 +191,7 @@ app.post('/register', async (req, res) => {
 
     // Create a new user object similar to the register endpoint
     const newUser = {
-      idToken,
+      idToken: appUserId,
       createdAt: new Date(),
       trialRecipeCount: 0,
       isAnonymous: true,
@@ -203,7 +203,7 @@ app.post('/register', async (req, res) => {
     // Create a trial subscription for the anonymous user
     await db.collection('subscriptions').insertOne({
       userId: result.insertedId.toString(),
-      idToken,
+      idToken: appUserId,
       isActive: true,
       trialPeriod: true,
       startDate: new Date(),
@@ -211,7 +211,7 @@ app.post('/register', async (req, res) => {
       createdAt: new Date()
     });
 
-    res.json({ userId: result.insertedId, idToken });
+    res.json({ userId: result.insertedId, appUserId });
   } catch (error) {
     console.error('Anonymous registration error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -226,13 +226,13 @@ app.post('/uemes171221', async (req, res) => {
     }
 
     const db = await connectDB();
-    const user = await db.collection('users').findOne({ appUserId });
+    const user = await db.collection('users').findOne({ idToken });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     const subscription = await db.collection('subscriptions').findOne({
-      appUserId,
+      idToken,
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
@@ -244,7 +244,7 @@ app.post('/uemes171221', async (req, res) => {
       }
 
       await db.collection('users').updateOne(
-        { appUserId },
+        { idToken },
         { $inc: { trialRecipeCount: 1 } }
       );
     }
@@ -255,7 +255,7 @@ app.post('/uemes171221', async (req, res) => {
     });
 
     await db.collection('aiInteractions').insertOne({
-      appUserId,
+      idToken: appUserId,
       message,
       response: completion.choices[0].message.content,
       timestamp: new Date()
@@ -358,9 +358,9 @@ app.get('/userInfo/:userId', async (req, res) => {
   }
 });
 
-app.post('/preferences/:userId', requireActiveSubscription, async (req, res) => {
+app.post('/preferences/:appUserId', requireActiveSubscription, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { appUserId } = req.params;
     const preferences = req.body;
     
     // Gelen tercihlerin boş olmadığını kontrol et
@@ -369,7 +369,7 @@ app.post('/preferences/:userId', requireActiveSubscription, async (req, res) => 
     }
 
     // Geçerli bir ObjectId olduğunu kontrol et
-    if (!ObjectId.isValid(userId)) {
+    if (!ObjectId.isValid(appUserId)) {
       return res.status(400).json({ error: 'Invalid user ID' });
     }
 
@@ -377,18 +377,18 @@ app.post('/preferences/:userId', requireActiveSubscription, async (req, res) => 
     const collection = db.collection('preferences');
     
     // Kullanıcının var olduğunu kontrol et
-    const userExists = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(userId) });
+    const userExists = await db.collection('users').findOne({ _id: ObjectId.createFromHexString(appUserId) });
     if (!userExists) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     const result = await collection.updateOne(
-      { userId: ObjectId.createFromHexString(userId) },
+      { userId: ObjectId.createFromHexString(appUserId) },
       { 
         $set: { 
           ...preferences,
           updatedAt: new Date(),
-          userId: ObjectId.createFromHexString(userId) // userId'yi de preferences içinde saklayalım
+          userId: ObjectId.createFromHexString(appUserId) // userId'yi de preferences içinde saklayalım
         } 
       },
       { upsert: true }
@@ -409,13 +409,13 @@ app.post('/preferences/:userId', requireActiveSubscription, async (req, res) => 
   }
 });
 
-app.get('/preferences/:userId', requireActiveSubscription, async (req, res) => {
+app.get('/preferences/:appUserId', requireActiveSubscription, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { appUserId } = req.params;
     const db = await connectDB();
     const collection = db.collection('preferences');
     
-    const preferences = await collection.findOne({ userId: ObjectId.createFromHexString(userId) });
+    const preferences = await collection.findOne({ userId: ObjectId.createFromHexString(appUserId) });
     
     if (!preferences) {
       return res.status(404).json({ error: 'Preferences not found' });
@@ -430,10 +430,10 @@ app.get('/preferences/:userId', requireActiveSubscription, async (req, res) => {
 
 app.post('/recipes', requireActiveSubscription, async (req, res) => {
   try {
-    const { title, mealType, servings, content, userId, preferences } = req.body;
+    const { title, mealType, servings, content, appUserId, preferences } = req.body;
     
     // userId kontrolünü daha detaylı yapalım
-    if (!userId) {
+    if (!appUserId) {
       console.error('Save Recipe Error: No userId provided in request body');
       return res.status(400).json({ 
         error: 'Missing required fields',
@@ -453,21 +453,21 @@ app.post('/recipes', requireActiveSubscription, async (req, res) => {
     
     // ObjectId dönüşümünü try-catch içine alalım
     try {
-      const userObjectId = ObjectId.createFromHexString(userId);
+      const userObjectId = ObjectId.createFromHexString(appUserId);
       
       const recipe = {
         title,
         mealType,
         servings,
         content,
-        userId: userObjectId,
+        appUserId: userObjectId,
         preferences,
         createdAt: new Date(),
         updatedAt: new Date()
       };
 
       const result = await collection.insertOne(recipe);
-      console.log('Recipe saved successfully for userId:', userId);
+      console.log('Recipe saved successfully for userId:', appUserId);
       
       res.status(201).json({ 
         success: true,
@@ -475,7 +475,7 @@ app.post('/recipes', requireActiveSubscription, async (req, res) => {
         recipeId: result.insertedId 
       });
     } catch (idError) {
-      console.error('Invalid userId format:', userId);
+      console.error('Invalid userId format:', appUserId);
       return res.status(400).json({ 
         error: 'Invalid userId format',
         details: idError.message 
@@ -490,15 +490,15 @@ app.post('/recipes', requireActiveSubscription, async (req, res) => {
   }
 });
 
-app.get('/recipes/:userId', requireActiveSubscription, async (req, res) => {
+app.get('/recipes/:appUserId', requireActiveSubscription, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { appUserId } = req.params;
     const { mealType, page = 1, limit = 10 } = req.query;
     
     const db = await connectDB();
     const collection = db.collection('recipes');
     
-    const query = { userId: ObjectId.createFromHexString(userId) };
+    const query = { userId: ObjectId.createFromHexString(appUserId) };
     if (mealType) {
       query.mealType = mealType;
     }
@@ -529,16 +529,16 @@ app.get('/recipes/:userId', requireActiveSubscription, async (req, res) => {
   }
 });
 
-app.get('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res) => {
+app.get('/recipes/:appUserId/:recipeId', requireActiveSubscription, async (req, res) => {
   try {
-    const { userId, recipeId } = req.params;
+    const { appUserId, recipeId } = req.params;
     
     const db = await connectDB();
     const collection = db.collection('recipes');
     
     const recipe = await collection.findOne({
       _id: ObjectId.createFromHexString(recipeId),
-      userId: ObjectId.createFromHexString(userId)
+      appUserId: ObjectId.createFromHexString(appUserId)
     });
 
     if (!recipe) {
@@ -554,11 +554,11 @@ app.get('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res
 
 app.put('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res) => {
   try {
-    const { userId, recipeId } = req.params;
+    const { appUserId, recipeId } = req.params;
     const updateData = req.body;
     
     delete updateData._id; // Prevent _id modification
-    delete updateData.userId; // Prevent userId modification
+    delete updateData.appUserId; // Prevent userId modification
     
     const db = await connectDB();
     const collection = db.collection('recipes');
@@ -566,7 +566,7 @@ app.put('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res
     const result = await collection.updateOne(
       {
         _id: ObjectId.createFromHexString(recipeId),
-        userId: ObjectId.createFromHexString(userId)
+        userId: ObjectId.createFromHexString(appUserId)
       },
       {
         $set: {
@@ -587,16 +587,16 @@ app.put('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res
   }
 });
 
-app.delete('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, res) => {
+app.delete('/recipes/:appUserId/:recipeId', requireActiveSubscription, async (req, res) => {
   try {
-    const { userId, recipeId } = req.params;
+    const { appUserId, recipeId } = req.params;
     
     const db = await connectDB();
     const collection = db.collection('recipes');
     
     const result = await collection.deleteOne({
       _id: ObjectId.createFromHexString(recipeId),
-      userId: ObjectId.createFromHexString(userId)
+      appUserId: ObjectId.createFromHexString(appUserId)
     });
 
     if (result.deletedCount === 0) {
@@ -610,16 +610,16 @@ app.delete('/recipes/:userId/:recipeId', requireActiveSubscription, async (req, 
   }
 });
 
-app.get('/recipes/:userId/search', requireActiveSubscription, async (req, res) => {
+app.get('/recipes/:appUserId/search', requireActiveSubscription, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { appUserId } = req.params;
     const { query, mealType, page = 1, limit = 10 } = req.query;
     
     const db = await connectDB();
     const collection = db.collection('recipes');
     
     const searchQuery = {
-      userId: ObjectId.createFromHexString(userId)
+      appUserId: ObjectId.createFromHexString(appUserId)
     };
 
     if (query) {
@@ -662,16 +662,16 @@ app.get('/recipes/:userId/search', requireActiveSubscription, async (req, res) =
 // Abonelik doğrulama endpoint'ini güncelleyelim - sadece trialPeriod'u false yapan değişiklik
 app.post('/verify-subscription', async (req, res) => {
   try {
-    const { userId, receipt, productId } = req.body;
+    const { appUserId, receipt, productId } = req.body;
     
-    console.log('Verifying subscription for userId:', userId);
+    console.log('Verifying subscription for userId:', appUserId);
     console.log('Product ID:', productId);
     
-    if (!userId || !receipt || !productId) {
+    if (!appUserId || !receipt || !productId) {
       return res.status(400).json({ 
         error: 'Missing required fields',
         details: {
-          userId: !!userId,
+          idToken: !!appUserId,
           receipt: !!receipt,
           productId: !!productId
         }
@@ -690,7 +690,7 @@ app.post('/verify-subscription', async (req, res) => {
       // Doğrulama hatası olsa bile, aboneliği aktifleştir
       const db = await connectDB();
       await db.collection('subscriptions').updateOne(
-        { userId: ObjectId.createFromHexString(userId) },
+        { idToken: ObjectId.createFromHexString(appUserId) },
         {
           $set: {
             isActive: true,
@@ -718,13 +718,13 @@ app.post('/verify-subscription', async (req, res) => {
       // Doğrulama başarısız olsa bile, aboneliği aktifleştir
       const db = await connectDB();
       await db.collection('subscriptions').updateOne(
-        { userId: ObjectId.createFromHexString(userId) },
+        { idToken: ObjectId.createFromHexString(appUserId) },
         {
           $set: {
             isActive: true,
             trialPeriod: false,  // Her durumda trial period'u false yap
             productId: productId,
-            expirationDate: new Date(Date.now() + (365 * 24 * 60 * 60 * 1000)), // 1 yıl
+            expirationDate: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)),
             receipt: receipt,
             updatedAt: new Date()
           }
@@ -735,17 +735,17 @@ app.post('/verify-subscription', async (req, res) => {
       return res.json({ 
         success: true,
         message: 'Subscription activated despite invalid receipt',
-        expirationDate: new Date(Date.now() + (365 * 24 * 60 * 60 * 1000))
+        expirationDate: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000))
       });
     }
 
     // Başarılı doğrulama durumu - normal işlem
     const db = await connectDB();
     const updateResult = await db.collection('subscriptions').updateOne(
-      { userId: ObjectId.createFromHexString(userId) },
+      { idToken: ObjectId.createFromHexString(appUserId) },
       {
         $set: {
-          userId: ObjectId.createFromHexString(userId),
+          idToken: ObjectId.createFromHexString(appUserId),
           productId,
           originalTransactionId: validationData.latest_receipt_info?.[0]?.original_transaction_id,
           latestTransactionId: validationData.latest_receipt_info?.[0]?.transaction_id,
@@ -768,7 +768,7 @@ app.post('/verify-subscription', async (req, res) => {
       message: 'Subscription activated successfully',
       expirationDate: validationData.latest_receipt_info?.[0]?.expires_date_ms ? 
                      new Date(parseInt(validationData.latest_receipt_info[0].expires_date_ms)) : 
-                     new Date(Date.now() + (365 * 24 * 60 * 60 * 1000))
+                     new Date(Date.now() + (30 * 24 * 60 * 60 * 1000))
     });
   } catch (error) {
     console.error('Subscription verification error:', error);
@@ -782,11 +782,11 @@ app.post('/verify-subscription', async (req, res) => {
 // Subscription status endpoint'ini de kontrol edelim
 app.get('/subscription-status/:userId', async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { appUserId } = req.params;
     const db = await connectDB();
     
     const subscription = await db.collection('subscriptions').findOne({
-      userId: ObjectId.createFromHexString(userId),
+      idToken: ObjectId.createFromHexString(appUserId),
       isActive: true,
       $or: [
         { expirationDate: { $gt: new Date() } },
@@ -794,7 +794,7 @@ app.get('/subscription-status/:userId', async (req, res) => {
       ]
     });
 
-    console.log('Subscription check for userId:', userId, 'Result:', subscription);
+    console.log('Subscription check for userId:', idToken, 'Result:', subscription);
 
     res.json({
       isActive: !!subscription,
@@ -811,11 +811,11 @@ app.get('/subscription-status/:userId', async (req, res) => {
 
 app.get('/feature-access/:userId', async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { appUserId } = req.params;
     const db = await connectDB();
     
     const subscription = await db.collection('subscriptions').findOne({
-      userId: ObjectId.createFromHexString(userId),
+      idToken: ObjectId.createFromHexString(appUserId),
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
@@ -838,18 +838,18 @@ app.get('/feature-access/:userId', async (req, res) => {
   }
 });
 
-app.delete('/users/:userId', async (req, res) => {
+app.delete('/users/:appUserId', async (req, res) => {
   try {
-    const { userId } = req.params;
-    if (!ObjectId.isValid(userId)) {
+    const { appUserId } = req.params;
+    if (!ObjectId.isValid(appUserId)) {
       return res.status(400).json({ error: 'Invalid user ID format' });
     }
 
     const db = await connectDB();
-    const userObjectId = ObjectId.createFromHexString(userId);
+    const userObjectId = ObjectId.createFromHexString(appUserId);
 
     // Kullanıcıyı kontrol et
-    const user = await db.collection('users').findOne({ _id: userObjectId });
+    const user = await db.collection('users').findOne({ idToken: userObjectId });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -858,7 +858,7 @@ app.delete('/users/:userId', async (req, res) => {
     try {
       // RevenueCat'te aboneliği iptal etmeye çalış (opsiyonel)
       if (process.env.NODE_ENV === 'production' && REVENUECAT_API_KEY) {
-        await axios.post(`https://api.revenuecat.com/v1/subscribers/${user.appleId || userId}/revoke`, null, {
+        await axios.post(`https://api.revenuecat.com/v1/subscribers/${user.appleId || appUserId}/revoke`, null, {
           headers: {
             'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
             'Content-Type': 'application/json'
@@ -873,11 +873,11 @@ app.delete('/users/:userId', async (req, res) => {
 
     // Kullanıcı ve ilgili tüm verileri sil
     await Promise.all([
-      db.collection('users').deleteOne({ _id: userObjectId }),
+      db.collection('users').deleteOne({ idToken: userObjectId }),
       db.collection('preferences').deleteOne({ userId: userObjectId }),
-      db.collection('recipes').deleteMany({ userId: userObjectId }),
-      db.collection('subscriptions').deleteMany({ userId: userObjectId }),
-      db.collection('aiInteractions').deleteMany({ userId: userObjectId })
+      db.collection('recipes').deleteMany({ appUserId: userObjectId }),
+      db.collection('subscriptions').deleteMany({ idToken: userObjectId }),
+      db.collection('aiInteractions').deleteMany({ idToken: userObjectId })
     ]);
 
     res.json({ 
@@ -962,9 +962,26 @@ app.post('/webhooks/revenuecat', verifyRevenueCatWebhook, async (req, res) => {
 
     switch (event.type) {
       case 'INITIAL_PURCHASE':
+        await db.collection('subscriptions').updateOne(
+          { idToken: event.app_user_id },
+          {
+            $set: {
+              isActive: true,
+              trialPeriod: false,
+              productId: event.product_id,
+              expirationDate: new Date(event.expiration_at_ms),
+              environment: event.environment,
+              updatedAt: new Date(),
+              lastWebhookEvent: event.type,
+              lastWebhookTimestamp: new Date()
+            }
+          },
+          { upsert: true }
+        );
+        break;
       case 'RENEWAL':
         await db.collection('subscriptions').updateOne(
-          { userId: event.app_user_id },
+          { idToken: event.app_user_id },
           {
             $set: {
               isActive: true,
@@ -982,17 +999,39 @@ app.post('/webhooks/revenuecat', verifyRevenueCatWebhook, async (req, res) => {
         break;
 
       case 'CANCELLATION':
-      case 'EXPIRATION':
         await db.collection('subscriptions').updateOne(
-          { userId: event.app_user_id },
+          { idToken: event.app_user_id },
           {
             $set: {
               isActive: false,
+              trialPeriod: false,
+              productId: event.product_id,
+              expirationDate: new Date(event.expiration_at_ms),
+              environment: event.environment,
               updatedAt: new Date(),
               lastWebhookEvent: event.type,
               lastWebhookTimestamp: new Date()
             }
-          }
+          },
+          { upsert: true }
+        );
+        break;
+      case 'EXPIRATION':
+        await db.collection('subscriptions').updateOne(
+          { idToken: event.app_user_id },
+          {
+            $set: {
+              isActive: false,
+              trialPeriod: false,
+              productId: event.product_id,
+              expirationDate: new Date(event.expiration_at_ms),
+              environment: event.environment,
+              updatedAt: new Date(),
+              lastWebhookEvent: event.type,
+              lastWebhookTimestamp: new Date()
+            }
+          },
+          { upsert: true }
         );
         break;
 
