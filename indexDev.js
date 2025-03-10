@@ -218,7 +218,7 @@ app.post('/register', async (req, res) => {
   }
 });
 
-app.post('/uemes171221', async (req, res) => {
+app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
   try {
     const { message, appUserId } = req.body;
     if (!message || !appUserId) {
