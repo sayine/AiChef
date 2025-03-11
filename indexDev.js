@@ -844,24 +844,6 @@ app.delete('/users/:appUserId', async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-
-    // RevenueCat API çağrısını try-catch içine alıp, hata durumunda işleme devam et
-    try {
-      // RevenueCat'te aboneliği iptal etmeye çalış (opsiyonel)
-      if (process.env.NODE_ENV === 'production' && REVENUECAT_API_KEY) {
-        await axios.post(`https://api.revenuecat.com/v1/subscribers/${user.appleId || appUserId}/revoke`, null, {
-          headers: {
-            'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
-            'Content-Type': 'application/json'
-          }
-        });
-        console.log('RevenueCat subscription revoked successfully');
-      }
-    } catch (revenueCatError) {
-      // Sadece loglama yap, işlemi durdurmadan devam et
-      console.error('RevenueCat API error (non-critical):', revenueCatError.message);
-    }
-
     // Kullanıcı ve ilgili tüm verileri sil
     await Promise.all([
       db.collection('users').deleteOne({ idToken: userObjectId }),
