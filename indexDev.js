@@ -134,7 +134,7 @@ const requireActiveSubscription = async (req, res, next) => {
       
       req.subscription = trialSubscription;
       return next();
-    }
+    
     
     // Hiçbir aktif abonelik yoksa, erişimi reddet
     console.log('No active subscription found');
