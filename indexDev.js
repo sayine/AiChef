@@ -92,9 +92,6 @@ async function connectDB() {
   }
 }
 
-// Add this after the MongoDB connection setup
-const TRIAL_MAX_RECIPES = 3;
-
 // Middleware'i güncelleyelim
 const requireActiveSubscription = async (req, res, next) => {
   try {
@@ -134,26 +131,6 @@ const requireActiveSubscription = async (req, res, next) => {
       isActive: true,
       trialPeriod: true
     });
-    
-    if (trialSubscription) {
-      console.log('User has trial subscription');
-      
-      // Deneme süresi için kullanım limitini kontrol et
-      if (req.path.includes('/uemes171221')) {
-        const user = await db.collection('users').findOne(
-          { idToken: userId }
-        );
-        
-        const trialCount = user?.trialRecipeCount || 0;
-        console.log(`User has used ${trialCount} of ${TRIAL_MAX_RECIPES} trial recipes`);
-        
-        if (trialCount >= TRIAL_MAX_RECIPES) {
-          return res.status(403).json({ 
-            error: 'Trial limit reached',
-            details: 'Please upgrade to continue generating recipes'
-          });
-        }
-      }
       
       req.subscription = trialSubscription;
       return next();
@@ -193,7 +170,6 @@ app.post('/register', async (req, res) => {
     const newUser = {
       idToken: appUserId,
       createdAt: new Date(),
-      trialRecipeCount: 0,
       isAnonymous: true,
       // Add any additional fields that are present in the register endpoint
     };
@@ -207,7 +183,7 @@ app.post('/register', async (req, res) => {
       isActive: true,
       trialPeriod: true,
       startDate: new Date(),
-      expirationDate: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)), // 7-day trial
+      expirationDate: new Date(Date.now() + (3 * 24 * 60 * 60 * 1000)), // 3-day trial
       createdAt: new Date()
     });
 
@@ -236,18 +212,6 @@ app.post('/uemes171221', requireActiveSubscription, async (req, res) => {
       isActive: true,
       expirationDate: { $gt: new Date() }
     });
-
-    if (!subscription) {
-      const recipeCount = user.trialRecipeCount || 0;
-      if (recipeCount >= 3) {
-        return res.status(403).json({ error: 'Trial limit reached' });
-      }
-
-      await db.collection('users').updateOne(
-        { idToken: appUserId },
-        { $inc: { trialRecipeCount: 1 } }
-      );
-    }
 
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
@@ -304,7 +268,7 @@ app.post('/register-apple', async (req, res) => {
       isActive: true,
       trialPeriod: true,
       startDate: new Date(),
-      expirationDate: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)), // 7 günlük deneme
+      expirationDate: new Date(Date.now() + (3 * 24 * 60 * 60 * 1000)), // 3 günlük deneme
       createdAt: new Date()
     });
 
@@ -718,7 +682,7 @@ app.post('/verify-subscription', async (req, res) => {
             isActive: true,
             trialPeriod: false,  // Her durumda trial period'u false yap
             productId: productId,
-            expirationDate: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)),
+            expirationDate: new Date(Date.now() + (3 * 24 * 60 * 60 * 1000)),
             receipt: receipt,
             updatedAt: new Date()
           }
@@ -729,7 +693,7 @@ app.post('/verify-subscription', async (req, res) => {
       return res.json({ 
         success: true,
         message: 'Subscription activated despite invalid receipt',
-        expirationDate: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000))
+        expirationDate: new Date(Date.now() + (3 * 24 * 60 * 60 * 1000))
       });
     }
 
@@ -745,7 +709,7 @@ app.post('/verify-subscription', async (req, res) => {
           latestTransactionId: validationData.latest_receipt_info?.[0]?.transaction_id,
           expirationDate: validationData.latest_receipt_info?.[0]?.expires_date_ms ? 
                          new Date(parseInt(validationData.latest_receipt_info[0].expires_date_ms)) : 
-                         new Date(Date.now() + (365 * 24 * 60 * 60 * 1000)),
+                         new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)),
           isActive: true,
           trialPeriod: false,  // Her durumda trial period'u false yap
           receipt: receipt,
