@@ -129,12 +129,32 @@ const requireActiveSubscription = async (req, res, next) => {
     const trialSubscription = await db.collection('subscriptions').findOne({
       idToken: userId,
       isActive: true,
-      trialPeriod: true
+      trialPeriod: true,
+      expirationDate: { $gt: new Date() }  // Deneme süresi bitiş tarihi kontrolü eklendi
     });
-      
+
+    if (trialSubscription) {
+      console.log('User has active trial subscription');
       req.subscription = trialSubscription;
       return next();
-    
+    }
+
+    // Deneme süresi bitmiş abonelikleri güncelle
+    await db.collection('subscriptions').updateMany(
+      {
+        idToken: userId,
+        isActive: true,
+        trialPeriod: true,
+        expirationDate: { $lte: new Date() }
+      },
+      {
+        $set: {
+          isActive: true,
+          trialPeriod: false,
+          updatedAt: new Date()
+        }
+      }
+    );
     
     // Hiçbir aktif abonelik yoksa, erişimi reddet
     console.log('No active subscription found');
